@@ -99,7 +99,7 @@ public class RegionStateNode implements Comparable<RegionStateNode> {
 
   /**
    * Updated whenever a call to {@link #setRegionLocation(ServerName)} or
-   * {@link #setState(State, State...)}.
+   * {@link #setState(RegionState.State, RegionState.State...)}.
    */
   private volatile long lastUpdate = 0;
 
@@ -294,7 +294,7 @@ public class RegionStateNode implements Comparable<RegionStateNode> {
     RegionInfo ri = getRegionInfo();
     State s = state;
     if (s != State.OPEN) {
-      throw new DoNotRetryRegionException(ri.getEncodedName() + " is no OPEN; state=" + s);
+      throw new DoNotRetryRegionException(ri.getEncodedName() + " is not OPEN; state=" + s);
     }
     if (ri.isSplitParent()) {
       throw new DoNotRetryRegionException(

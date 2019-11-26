@@ -83,7 +83,7 @@ public final class HConstants {
   /**
    * Status codes used for return values of bulk operations.
    */
-  @InterfaceAudience.Private
+  @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.COPROC)
   public enum OperationStatusCode {
     NOT_RUN,
     SUCCESS,
@@ -170,6 +170,11 @@ public final class HConstants {
 
   /** Configuration key for master web API port */
   public static final String MASTER_INFO_PORT = "hbase.master.info.port";
+
+  /** Configuration key for the list of master host:ports **/
+  public static final String MASTER_ADDRS_KEY = "hbase.master.addrs";
+
+  public static final String MASTER_ADDRS_DEFAULT =  "localhost:" + DEFAULT_MASTER_PORT;
 
   /** Parameter name for the master type being backup (waits for primary to go inactive). */
   public static final String MASTER_TYPE_BACKUP = "hbase.master.backup";
@@ -485,11 +490,31 @@ public final class HConstants {
   /** The upper-half split region column qualifier */
   public static final byte [] SPLITB_QUALIFIER = Bytes.toBytes("splitB");
 
-  /** The lower-half merge region column qualifier */
-  public static final byte[] MERGEA_QUALIFIER = Bytes.toBytes("mergeA");
+  /**
+   * Merge qualifier prefix.
+   * We used to only allow two regions merge; mergeA and mergeB.
+   * Now we allow many to merge. Each region to merge will be referenced
+   * in a column whose qualifier starts with this define.
+   */
+  public static final String MERGE_QUALIFIER_PREFIX_STR = "merge";
+  public static final byte [] MERGE_QUALIFIER_PREFIX =
+      Bytes.toBytes(MERGE_QUALIFIER_PREFIX_STR);
 
-  /** The upper-half merge region column qualifier */
-  public static final byte[] MERGEB_QUALIFIER = Bytes.toBytes("mergeB");
+  /**
+   * The lower-half merge region column qualifier
+   * @deprecated Since 2.3.0 and 2.2.1. Not used anymore. Instead we look for
+   *   the {@link #MERGE_QUALIFIER_PREFIX_STR} prefix.
+   */
+  @Deprecated
+  public static final byte[] MERGEA_QUALIFIER = Bytes.toBytes(MERGE_QUALIFIER_PREFIX_STR + "A");
+
+  /**
+   * The upper-half merge region column qualifier
+   * @deprecated Since 2.3.0 and 2.2.1. Not used anymore. Instead we look for
+   *   the {@link #MERGE_QUALIFIER_PREFIX_STR} prefix.
+   */
+  @Deprecated
+  public static final byte[] MERGEB_QUALIFIER = Bytes.toBytes(MERGE_QUALIFIER_PREFIX_STR + "B");
 
   /** The catalog family as a string*/
   public static final String TABLE_FAMILY_STR = "table";
@@ -1171,6 +1196,9 @@ public final class HConstants {
       "hbase.node.health.failure.threshold";
   public static final int DEFAULT_HEALTH_FAILURE_THRESHOLD = 3;
 
+  public static final String EXECUTOR_STATUS_COLLECT_ENABLED =
+      "hbase.executors.status.collect.enabled";
+  public static final boolean DEFAULT_EXECUTOR_STATUS_COLLECT_ENABLED = true;
 
   /**
    * Setting to activate, or not, the publication of the status by the master. Default
@@ -1300,27 +1328,72 @@ public final class HConstants {
    */
   /**
    * Config for enabling/disabling the fast fail mode.
+   * @deprecated since 2.3.0, and in 3.0.0 the actually implementation will be removed so config
+   *             this value will have no effect. The constants itself will be removed in 4.0.0.
    */
+  @Deprecated
   public static final String HBASE_CLIENT_FAST_FAIL_MODE_ENABLED =
-      "hbase.client.fast.fail.mode.enabled";
+    "hbase.client.fast.fail.mode.enabled";
 
-  public static final boolean HBASE_CLIENT_ENABLE_FAST_FAIL_MODE_DEFAULT =
-      false;
+  /**
+   * @deprecated since 2.3.0, and in 3.0.0 the actually implementation will be removed so config
+   *             this value will have no effect. The constants itself will be removed in 4.0.0.
+   */
+  @Deprecated
+  public static final boolean HBASE_CLIENT_ENABLE_FAST_FAIL_MODE_DEFAULT = false;
 
+  /**
+   * @deprecated since 2.3.0, and in 3.0.0 the actually implementation will be removed so config
+   *             this value will have no effect. The constants itself will be removed in 4.0.0.
+   */
+  @Deprecated
   public static final String HBASE_CLIENT_FAST_FAIL_THREASHOLD_MS =
-      "hbase.client.fastfail.threshold";
+    "hbase.client.fastfail.threshold";
 
-  public static final long HBASE_CLIENT_FAST_FAIL_THREASHOLD_MS_DEFAULT =
-      60000;
+  /**
+   * @deprecated since 2.3.0, and in 3.0.0 the actually implementation will be removed so config
+   *             this value will have no effect. The constants itself will be removed in 4.0.0.
+   */
+  @Deprecated
+  public static final long HBASE_CLIENT_FAST_FAIL_THREASHOLD_MS_DEFAULT = 60000;
 
+  /**
+   * @deprecated since 2.3.0, and in 3.0.0 the actually implementation will be removed so config
+   *             this value will have no effect. The constants itself will be removed in 4.0.0.
+   */
+  @Deprecated
+  public static final String HBASE_CLIENT_FAILURE_MAP_CLEANUP_INTERVAL_MS =
+    "hbase.client.failure.map.cleanup.interval";
+
+  /**
+   * @deprecated since 2.3.0, and in 3.0.0 the actually implementation will be removed so config
+   *             this value will have no effect. The constants itself will be removed in 4.0.0.
+   */
+  @Deprecated
+  public static final long HBASE_CLIENT_FAILURE_MAP_CLEANUP_INTERVAL_MS_DEFAULT = 600000;
+
+  /**
+   * @deprecated since 2.3.0, and in 3.0.0 the actually implementation will be removed so config
+   *             this value will have no effect. The constants itself will be removed in 4.0.0.
+   */
+  @Deprecated
   public static final String HBASE_CLIENT_FAST_FAIL_CLEANUP_MS_DURATION_MS =
-      "hbase.client.fast.fail.cleanup.duration";
+    "hbase.client.fast.fail.cleanup.duration";
 
-  public static final long HBASE_CLIENT_FAST_FAIL_CLEANUP_DURATION_MS_DEFAULT =
-      600000;
+  /**
+   * @deprecated since 2.3.0, and in 3.0.0 the actually implementation will be removed so config
+   *             this value will have no effect. The constants itself will be removed in 4.0.0.
+   */
+  @Deprecated
+  public static final long HBASE_CLIENT_FAST_FAIL_CLEANUP_DURATION_MS_DEFAULT = 600000;
 
+  /**
+   * @deprecated since 2.3.0, and in 3.0.0 the actually implementation will be removed so config
+   *             this value will have no effect. The constants itself will be removed in 4.0.0.
+   */
+  @Deprecated
   public static final String HBASE_CLIENT_FAST_FAIL_INTERCEPTOR_IMPL =
-      "hbase.client.fast.fail.interceptor.impl";
+    "hbase.client.fast.fail.interceptor.impl";
 
   public static final String HBASE_SPLIT_WAL_COORDINATED_BY_ZK = "hbase.split.wal.zk.coordinated";
 
@@ -1399,6 +1472,47 @@ public final class HConstants {
   public static final String DEFAULT_LOSSY_COUNTING_ERROR_RATE =
       "hbase.util.default.lossycounting.errorrate";
   public static final String NOT_IMPLEMENTED = "Not implemented";
+
+  // Default TTL - FOREVER
+  public static final long DEFAULT_SNAPSHOT_TTL = 0;
+
+  // User defined Default TTL config key
+  public static final String DEFAULT_SNAPSHOT_TTL_CONFIG_KEY = "hbase.master.snapshot.ttl";
+
+  // Regions Recovery based on high storeFileRefCount threshold value
+  public static final String STORE_FILE_REF_COUNT_THRESHOLD =
+    "hbase.regions.recovery.store.file.ref.count";
+
+  // default -1 indicates there is no threshold on high storeRefCount
+  public static final int DEFAULT_STORE_FILE_REF_COUNT_THRESHOLD = -1;
+
+  public static final String REGIONS_RECOVERY_INTERVAL =
+    "hbase.master.regions.recovery.check.interval";
+
+  public static final int DEFAULT_REGIONS_RECOVERY_INTERVAL = 1200 * 1000; // Default 20 min
+
+  /**
+   * Configurations for master executor services.
+   */
+  public static final String MASTER_OPEN_REGION_THREADS =
+      "hbase.master.executor.openregion.threads";
+  public static final int MASTER_OPEN_REGION_THREADS_DEFAULT = 5;
+
+  public static final String MASTER_CLOSE_REGION_THREADS =
+      "hbase.master.executor.closeregion.threads";
+  public static final int MASTER_CLOSE_REGION_THREADS_DEFAULT = 5;
+
+  public static final String MASTER_SERVER_OPERATIONS_THREADS =
+      "hbase.master.executor.serverops.threads";
+  public static final int MASTER_SERVER_OPERATIONS_THREADS_DEFAULT = 5;
+
+  public static final String MASTER_META_SERVER_OPERATIONS_THREADS =
+      "hbase.master.executor.meta.serverops.threads";
+  public static final int MASTER_META_SERVER_OPERATIONS_THREADS_DEFAULT = 5;
+
+  public static final String MASTER_LOG_REPLAY_OPS_THREADS =
+      "hbase.master.executor.logreplayops.threads";
+  public static final int MASTER_LOG_REPLAY_OPS_THREADS_DEFAULT = 10;
 
   private HConstants() {
     // Can't be instantiated with this ctor.

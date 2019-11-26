@@ -23,11 +23,20 @@ import static org.junit.Assert.assertTrue;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
+import org.apache.hadoop.hbase.Coprocessor;
+import org.apache.hadoop.hbase.CoprocessorEnvironment;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.coprocessor.MasterCoprocessor;
+import org.apache.hadoop.hbase.coprocessor.MasterCoprocessorEnvironment;
+import org.apache.hadoop.hbase.coprocessor.MasterObserver;
+import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.RegionState;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.procedure.TableProcedureInterface;
@@ -102,6 +111,12 @@ public class TestHbck {
     TEST_UTIL.createMultiRegionTable(TABLE_NAME, Bytes.toBytes("family1"), 5);
     procExec = TEST_UTIL.getMiniHBaseCluster().getMaster().getMasterProcedureExecutor();
     ASYNC_CONN = ConnectionFactory.createAsyncConnection(TEST_UTIL.getConfiguration()).get();
+    TEST_UTIL.getHBaseCluster().getMaster().getMasterCoprocessorHost().load(
+      FailingMergeAfterMetaUpdatedMasterObserver.class, Coprocessor.PRIORITY_USER,
+      TEST_UTIL.getHBaseCluster().getMaster().getConfiguration());
+    TEST_UTIL.getHBaseCluster().getMaster().getMasterCoprocessorHost().load(
+      FailingSplitAfterMetaUpdatedMasterObserver.class, Coprocessor.PRIORITY_USER,
+      TEST_UTIL.getHBaseCluster().getMaster().getConfiguration());
   }
 
   @AfterClass
@@ -221,6 +236,74 @@ public class TestHbck {
     assertTrue(newPids.get(0) < 0);
     LOG.info("pid is {}", newPids.get(0));
     waitOnPids(pids);
+  }
+
+  @Test
+  public void testRunHbckChore() throws Exception {
+    HMaster master = TEST_UTIL.getMiniHBaseCluster().getMaster();
+    long endTimestamp = master.getHbckChore().getCheckingEndTimestamp();
+    Hbck hbck = getHbck();
+    boolean ran = false;
+    while (!ran) {
+      ran = hbck.runHbckChore();
+      if (ran) {
+        assertTrue(master.getHbckChore().getCheckingEndTimestamp() > endTimestamp);
+      }
+    }
+  }
+
+  public static class FailingSplitAfterMetaUpdatedMasterObserver
+      implements MasterCoprocessor, MasterObserver {
+    public volatile CountDownLatch latch;
+
+    @Override
+    public void start(CoprocessorEnvironment e) throws IOException {
+      resetLatch();
+    }
+
+    @Override
+    public Optional<MasterObserver> getMasterObserver() {
+      return Optional.of(this);
+    }
+
+    @Override
+    public void preSplitRegionAfterMETAAction(ObserverContext<MasterCoprocessorEnvironment> ctx)
+        throws IOException {
+      LOG.info("I'm here");
+      latch.countDown();
+      throw new IOException("this procedure will fail at here forever");
+    }
+
+    public void resetLatch() {
+      this.latch = new CountDownLatch(1);
+    }
+  }
+
+  public static class FailingMergeAfterMetaUpdatedMasterObserver
+      implements MasterCoprocessor, MasterObserver {
+    public volatile CountDownLatch latch;
+
+    @Override
+    public void start(CoprocessorEnvironment e) throws IOException {
+      resetLatch();
+    }
+
+    @Override
+    public Optional<MasterObserver> getMasterObserver() {
+      return Optional.of(this);
+    }
+
+    public void resetLatch() {
+      this.latch = new CountDownLatch(1);
+    }
+
+    @Override
+    public void postMergeRegionsCommitAction(
+        final ObserverContext<MasterCoprocessorEnvironment> ctx, final RegionInfo[] regionsToMerge,
+        final RegionInfo mergedRegion) throws IOException {
+      latch.countDown();
+      throw new IOException("this procedure will fail at here forever");
+    }
   }
 
   private void waitOnPids(List<Long> pids) {

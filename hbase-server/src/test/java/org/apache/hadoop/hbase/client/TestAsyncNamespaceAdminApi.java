@@ -17,7 +17,7 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import static org.apache.hadoop.hbase.client.AsyncProcess.START_LOG_ERRORS_AFTER_COUNT_KEY;
+import static org.apache.hadoop.hbase.client.AsyncConnectionConfiguration.START_LOG_ERRORS_AFTER_COUNT_KEY;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -71,9 +71,11 @@ public class TestAsyncNamespaceAdminApi extends TestAsyncAdminBase {
 
     // create namespace and verify
     admin.createNamespace(NamespaceDescriptor.create(nsName).build()).join();
+    assertEquals(3, admin.listNamespaces().get().size());
     assertEquals(3, admin.listNamespaceDescriptors().get().size());
     // delete namespace and verify
     admin.deleteNamespace(nsName).join();
+    assertEquals(2, admin.listNamespaces().get().size());
     assertEquals(2, admin.listNamespaceDescriptors().get().size());
   }
 

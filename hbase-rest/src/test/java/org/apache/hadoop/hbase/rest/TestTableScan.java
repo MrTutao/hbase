@@ -48,6 +48,7 @@ import javax.xml.bind.annotation.XmlRootElement;
 import javax.xml.parsers.SAXParserFactory;
 import javax.xml.stream.XMLStreamException;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -594,10 +595,10 @@ public class TestTableScan {
       RowModel rowModel = rowModels.get(i);
       RowModel reversedRowModel = reversedRowModels.get(i);
 
-      assertEquals(new String(rowModel.getKey(), "UTF-8"),
-          new String(reversedRowModel.getKey(), "UTF-8"));
-      assertEquals(new String(rowModel.getCells().get(0).getValue(), "UTF-8"),
-          new String(reversedRowModel.getCells().get(0).getValue(), "UTF-8"));
+      assertEquals(new String(rowModel.getKey(), StandardCharsets.UTF_8),
+          new String(reversedRowModel.getKey(), StandardCharsets.UTF_8));
+      assertEquals(new String(rowModel.getCells().get(0).getValue(), StandardCharsets.UTF_8),
+          new String(reversedRowModel.getCells().get(0).getValue(), StandardCharsets.UTF_8));
     }
   }
 
@@ -649,8 +650,9 @@ public class TestTableScan {
     }
 
     @Override
-    public boolean filterRowKey(byte[] buffer, int offset, int length) {
-      int cmp = Bytes.compareTo(buffer, offset, length, this.key, 0, this.key.length);
+    public boolean filterRowKey(Cell cell) {
+      int cmp = Bytes.compareTo(cell.getRowArray(), cell.getRowOffset(), cell.getRowLength(),
+              this.key, 0, this.key.length);
       return cmp != 0;
     }
 

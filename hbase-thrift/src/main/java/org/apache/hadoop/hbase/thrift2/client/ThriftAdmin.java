@@ -56,6 +56,8 @@ import org.apache.hadoop.hbase.quotas.SpaceQuotaSnapshot;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
 import org.apache.hadoop.hbase.replication.SyncReplicationState;
+import org.apache.hadoop.hbase.security.access.GetUserPermissionsRequest;
+import org.apache.hadoop.hbase.security.access.Permission;
 import org.apache.hadoop.hbase.security.access.UserPermission;
 import org.apache.hadoop.hbase.snapshot.RestoreSnapshotException;
 import org.apache.hadoop.hbase.thrift2.ThriftUtilities;
@@ -135,6 +137,11 @@ public class ThriftAdmin implements Admin {
   @Override
   public List<TableDescriptor> listTableDescriptors() throws IOException {
     return listTableDescriptors((Pattern) null);
+  }
+
+  @Override
+  public List<TableDescriptor> listTableDescriptors(boolean includeSysTables) throws IOException {
+    return listTableDescriptors(null, includeSysTables);
   }
 
   @Override
@@ -394,6 +401,16 @@ public class ThriftAdmin implements Admin {
   }
 
   @Override
+  public String[] listNamespaces() throws IOException {
+    try {
+      List<String> tNamespaces = client.listNamespaces();
+      return tNamespaces.toArray(new String[tNamespaces.size()]);
+    } catch (TException e) {
+      throw new IOException(e);
+    }
+  }
+
+  @Override
   public NamespaceDescriptor[] listNamespaceDescriptors() throws IOException {
     try {
       List<TNamespaceDescriptor> tNamespaceDescriptors = client.listNamespaceDescriptors();
@@ -551,9 +568,13 @@ public class ThriftAdmin implements Admin {
   }
 
   @Override
-  public void move(byte[] encodedRegionName, byte[] destServerName) {
+  public void move(byte[] encodedRegionName) {
     throw new NotImplementedException("move not supported in ThriftAdmin");
+  }
 
+  @Override
+  public void move(byte[] encodedRegionName, ServerName destServerName) {
+    throw new NotImplementedException("move not supported in ThriftAdmin");
   }
 
   @Override
@@ -701,6 +722,11 @@ public class ThriftAdmin implements Admin {
   @Override
   public ClusterMetrics getClusterMetrics(EnumSet<ClusterMetrics.Option> options) {
     throw new NotImplementedException("getClusterMetrics not supported in ThriftAdmin");
+  }
+
+  @Override
+  public List<RegionMetrics> getRegionMetrics(ServerName serverName) {
+    throw new NotImplementedException("getRegionMetrics not supported in ThriftAdmin");
   }
 
   @Override
@@ -852,11 +878,6 @@ public class ThriftAdmin implements Admin {
   public List<SnapshotDescription> listTableSnapshots(Pattern tableNamePattern,
       Pattern snapshotNamePattern) {
     throw new NotImplementedException("listTableSnapshots not supported in ThriftAdmin");
-  }
-
-  @Override
-  public void deleteSnapshot(byte[] snapshotName) {
-    throw new NotImplementedException("deleteSnapshot not supported in ThriftAdmin");
   }
 
   @Override
@@ -1032,6 +1053,11 @@ public class ThriftAdmin implements Admin {
   }
 
   @Override
+  public Future<Void> createTableAsync(TableDescriptor desc) {
+    throw new NotImplementedException("createTableAsync not supported in ThriftAdmin");
+  }
+
+  @Override
   public Future<Void> createTableAsync(TableDescriptor desc, byte[][] splitKeys) {
     throw new NotImplementedException("createTableAsync not supported in ThriftAdmin");
   }
@@ -1108,5 +1134,31 @@ public class ThriftAdmin implements Admin {
   @Override
   public void revoke(UserPermission userPermission) {
     throw new NotImplementedException("revoke not supported in ThriftAdmin");
+  }
+
+  @Override
+  public List<UserPermission> getUserPermissions(
+      GetUserPermissionsRequest getUserPermissionsRequest) {
+    throw new NotImplementedException("getUserPermissions not supported in ThriftAdmin");
+  }
+
+  @Override
+  public List<Boolean> hasUserPermissions(String userName, List<Permission> permissions) {
+    throw new NotImplementedException("hasUserPermissions not supported in ThriftAdmin");
+  }
+
+  @Override
+  public boolean snapshotCleanupSwitch(boolean on, boolean synchronous) {
+    throw new NotImplementedException("snapshotCleanupSwitch not supported in ThriftAdmin");
+  }
+
+  @Override
+  public boolean isSnapshotCleanupEnabled() {
+    throw new NotImplementedException("isSnapshotCleanupEnabled not supported in ThriftAdmin");
+  }
+
+  @Override
+  public Future<Void> splitRegionAsync(byte[] regionName) throws IOException {
+    return splitRegionAsync(regionName, null);
   }
 }

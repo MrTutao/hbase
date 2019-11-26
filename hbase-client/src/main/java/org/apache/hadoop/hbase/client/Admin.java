@@ -53,11 +53,14 @@ import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
 import org.apache.hadoop.hbase.replication.SyncReplicationState;
+import org.apache.hadoop.hbase.security.access.GetUserPermissionsRequest;
+import org.apache.hadoop.hbase.security.access.Permission;
 import org.apache.hadoop.hbase.security.access.UserPermission;
 import org.apache.hadoop.hbase.snapshot.HBaseSnapshotException;
 import org.apache.hadoop.hbase.snapshot.RestoreSnapshotException;
 import org.apache.hadoop.hbase.snapshot.SnapshotCreationException;
 import org.apache.hadoop.hbase.snapshot.UnknownSnapshotException;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
@@ -109,7 +112,7 @@ public interface Admin extends Abortable, Closeable {
   /**
    * @param tableName Table to check.
    * @return <code>true</code> if table exists already.
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   boolean tableExists(TableName tableName) throws IOException;
 
@@ -120,6 +123,14 @@ public interface Admin extends Abortable, Closeable {
    * @throws IOException if a remote or network exception occurs
    */
   List<TableDescriptor> listTableDescriptors() throws IOException;
+
+  /**
+   * List all userspace tables and whether or not include system tables.
+   *
+   * @return a list of TableDescriptors
+   * @throws IOException if a remote or network exception occurs
+   */
+  List<TableDescriptor> listTableDescriptors(boolean includeSysTables) throws IOException;
 
   /**
    * List all the userspace tables that match the given pattern.
@@ -194,7 +205,9 @@ public interface Admin extends Abortable, Closeable {
    * threads, the table may have been created between test-for-existence and attempt-at-creation).
    * @throws IOException if a remote or network exception occurs
    */
-  void createTable(TableDescriptor desc) throws IOException;
+  default void createTable(TableDescriptor desc) throws IOException {
+    get(createTableAsync(desc), getSyncWaitTimeout(), TimeUnit.MILLISECONDS);
+  }
 
   /**
    * Creates a new table with the specified number of regions.  The start key specified will become
@@ -207,11 +220,11 @@ public interface Admin extends Abortable, Closeable {
    * @param startKey beginning of key range
    * @param endKey end of key range
    * @param numRegions the total number of regions to create
+   * @throws IOException if a remote or network exception occurs
    * @throws IllegalArgumentException if the table name is reserved
    * @throws org.apache.hadoop.hbase.MasterNotRunningException if master is not running
    * @throws org.apache.hadoop.hbase.TableExistsException if table already exists (If concurrent
    * threads, the table may have been created between test-for-existence and attempt-at-creation).
-   * @throws IOException
    */
   void createTable(TableDescriptor desc, byte[] startKey, byte[] endKey, int numRegions)
       throws IOException;
@@ -228,11 +241,26 @@ public interface Admin extends Abortable, Closeable {
    * @throws org.apache.hadoop.hbase.MasterNotRunningException if master is not running
    * @throws org.apache.hadoop.hbase.TableExistsException if table already exists (If concurrent
    * threads, the table may have been created between test-for-existence and attempt-at-creation).
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   default void createTable(TableDescriptor desc, byte[][] splitKeys) throws IOException {
     get(createTableAsync(desc, splitKeys), getSyncWaitTimeout(), TimeUnit.MILLISECONDS);
   }
+
+  /**
+   * Creates a new table but does not block and wait for it to come online. You can use
+   * Future.get(long, TimeUnit) to wait on the operation to complete. It may throw
+   * ExecutionException if there was an error while executing the operation or TimeoutException in
+   * case the wait timeout was not long enough to allow the operation to complete.
+   * <p/>
+   * Throws IllegalArgumentException Bad table name, if the split keys are repeated and if the split
+   * key has empty byte array.
+   * @param desc table descriptor for table
+   * @throws IOException if a remote or network exception occurs
+   * @return the result of the async creation. You can use Future.get(long, TimeUnit) to wait on the
+   *         operation to complete.
+   */
+  Future<Void> createTableAsync(TableDescriptor desc) throws IOException;
 
   /**
    * Creates a new table but does not block and wait for it to come online.
@@ -246,11 +274,10 @@ public interface Admin extends Abortable, Closeable {
    * @param desc table descriptor for table
    * @param splitKeys keys to check if the table has been created with all split keys
    * @throws IOException if a remote or network exception occurs
-   * @return the result of the async creation. You can use Future.get(long, TimeUnit)
-   *    to wait on the operation to complete.
+   * @return the result of the async creation. You can use Future.get(long, TimeUnit) to wait on the
+   *         operation to complete.
    */
-  Future<Void> createTableAsync(TableDescriptor desc, byte[][] splitKeys)
-      throws IOException;
+  Future<Void> createTableAsync(TableDescriptor desc, byte[][] splitKeys) throws IOException;
 
   /**
    * Deletes a table. Synchronous operation.
@@ -304,7 +331,7 @@ public interface Admin extends Abortable, Closeable {
    * and {@link #isTableEnabled(org.apache.hadoop.hbase.TableName)} instead. The table has to be in
    * disabled state for it to be enabled.
    * @param tableName name of the table
-   * @throws IOException if a remote or network exception occurs There could be couple types of
+   * @throws IOException There could be couple types of
    *           IOException TableNotFoundException means the table doesn't exist.
    *           TableNotDisabledException means the table isn't in disabled state.
    * @see #isTableEnabled(org.apache.hadoop.hbase.TableName)
@@ -469,7 +496,7 @@ public interface Admin extends Abortable, Closeable {
    * Get all the online regions on a region server.
    *
    * @return List of {@link RegionInfo}
-   * @throws java.io.IOException
+   * @throws IOException if a remote or network exception occurs
    */
   List<RegionInfo> getRegions(ServerName serverName) throws IOException;
 
@@ -647,6 +674,7 @@ public interface Admin extends Abortable, Closeable {
    * @param switchState     Set to <code>true</code> to enable, <code>false</code> to disable.
    * @param serverNamesList list of region servers.
    * @return Previous compaction states for region servers
+   * @throws IOException if a remote or network exception occurs
    */
   Map<ServerName, Boolean> compactionSwitch(boolean switchState, List<String> serverNamesList)
       throws IOException;
@@ -670,34 +698,68 @@ public interface Admin extends Abortable, Closeable {
   void majorCompactRegionServer(ServerName serverName) throws IOException;
 
   /**
-   * Move the region <code>r</code> to <code>dest</code>.
-   *
+   * Move the region <code>encodedRegionName</code> to a random server.
    * @param encodedRegionName The encoded region name; i.e. the hash that makes up the region name
-   * suffix: e.g. if regionname is
-   * <code>TestTable,0094429456,1289497600452.527db22f95c8a9e0116f0cc13c680396.</code>,
-   * then the encoded region name is: <code>527db22f95c8a9e0116f0cc13c680396</code>.
-   * @param destServerName The servername of the destination regionserver.  If passed the empty byte
-   * array we'll assign to a random server.  A server name is made of host, port and startcode.
-   * Here is an example: <code> host187.example.com,60020,1289493121758</code>
-   * @throws IOException if we can't find a region named
-   * <code>encodedRegionName</code>
+   *          suffix: e.g. if regionname is
+   *          <code>TestTable,0094429456,1289497600452.527db22f95c8a9e0116f0cc13c680396.</code>,
+   *          then the encoded region name is: <code>527db22f95c8a9e0116f0cc13c680396</code>.
+   * @throws IOException if we can't find a region named <code>encodedRegionName</code>
    */
-  void move(byte[] encodedRegionName, byte[] destServerName) throws IOException;
+  void move(byte[] encodedRegionName) throws IOException;
+
+  /**
+   * Move the region <code>rencodedRegionName</code> to <code>destServerName</code>.
+   * @param encodedRegionName The encoded region name; i.e. the hash that makes up the region name
+   *          suffix: e.g. if regionname is
+   *          <code>TestTable,0094429456,1289497600452.527db22f95c8a9e0116f0cc13c680396.</code>,
+   *          then the encoded region name is: <code>527db22f95c8a9e0116f0cc13c680396</code>.
+   * @param destServerName The servername of the destination regionserver. If passed the empty byte
+   *          array we'll assign to a random server. A server name is made of host, port and
+   *          startcode. Here is an example: <code> host187.example.com,60020,1289493121758</code>
+   * @throws IOException if we can't find a region named <code>encodedRegionName</code>
+   * @deprecated since 2.2.0 and will be removed in 4.0.0. Use {@link #move(byte[], ServerName)}
+   *   instead. And if you want to move the region to a random server, please use
+   *   {@link #move(byte[])}.
+   * @see <a href="https://issues.apache.org/jira/browse/HBASE-22108">HBASE-22108</a>
+   */
+  @Deprecated
+  default void move(byte[] encodedRegionName, byte[] destServerName) throws IOException {
+    if (destServerName == null || destServerName.length == 0) {
+      move(encodedRegionName);
+    } else {
+      move(encodedRegionName, ServerName.valueOf(Bytes.toString(destServerName)));
+    }
+  }
+
+  /**
+   * Move the region <code>encodedRegionName</code> to <code>destServerName</code>.
+   * @param encodedRegionName The encoded region name; i.e. the hash that makes up the region name
+   *          suffix: e.g. if regionname is
+   *          <code>TestTable,0094429456,1289497600452.527db22f95c8a9e0116f0cc13c680396.</code>,
+   *          then the encoded region name is: <code>527db22f95c8a9e0116f0cc13c680396</code>.
+   * @param destServerName The servername of the destination regionserver. A server name is made of
+   *          host, port and startcode. Here is an example:
+   *          <code> host187.example.com,60020,1289493121758</code>
+   * @throws IOException if we can't find a region named <code>encodedRegionName</code>
+   */
+  void move(byte[] encodedRegionName, ServerName destServerName) throws IOException;
 
   /**
    * Assign a Region.
    * @param regionName Region name to assign.
+   * @throws IOException if a remote or network exception occurs
    */
   void assign(byte[] regionName) throws IOException;
 
   /**
    * Unassign a region from current hosting regionserver.  Region will then be assigned to a
    * regionserver chosen at random.  Region could be reassigned back to the same server.  Use {@link
-   * #move(byte[], byte[])} if you want to control the region movement.
+   * #move(byte[], ServerName)} if you want to control the region movement.
    *
    * @param regionName Region to unassign. Will clear any existing RegionPlan if one found.
    * @param force If <code>true</code>, force unassign (Will remove region from regions-in-transition too if
    * present. If results in double assignment use hbck -fix to resolve. To be used by experts).
+   * @throws IOException if a remote or network exception occurs
    */
   void unassign(byte[] regionName, boolean force)
       throws IOException;
@@ -710,7 +772,7 @@ public interface Admin extends Abortable, Closeable {
    * experts or hbck.
    *
    * @param regionName Region to offline.
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   void offline(byte[] regionName) throws IOException;
 
@@ -720,15 +782,16 @@ public interface Admin extends Abortable, Closeable {
    * @param synchronous If <code>true</code>, it waits until current balance() call, if outstanding,
    *          to return.
    * @return Previous balancer value
+   * @throws IOException if a remote or network exception occurs
    */
   boolean balancerSwitch(boolean onOrOff, boolean synchronous) throws IOException;
-
 
   /**
    * Invoke the balancer.  Will run the balancer and if regions to move, it will go ahead and do the
    * reassignments.  Can NOT run for various reasons.  Check logs.
    *
    * @return <code>true</code> if balancer ran, <code>false</code> otherwise.
+   * @throws IOException if a remote or network exception occurs
    */
   boolean balance() throws IOException;
 
@@ -739,6 +802,7 @@ public interface Admin extends Abortable, Closeable {
    * logs.
    * @param force whether we should force balance even if there is region in transition
    * @return <code>true</code> if balancer ran, <code>false</code> otherwise.
+   * @throws IOException if a remote or network exception occurs
    */
   boolean balance(boolean force) throws IOException;
 
@@ -746,6 +810,7 @@ public interface Admin extends Abortable, Closeable {
    * Query the current state of the balancer.
    *
    * @return <code>true</code> if the balancer is enabled, <code>false</code> otherwise.
+   * @throws IOException if a remote or network exception occurs
    */
   boolean isBalancerEnabled() throws IOException;
 
@@ -765,6 +830,7 @@ public interface Admin extends Abortable, Closeable {
    * Invoke region normalizer. Can NOT run for various reasons.  Check logs.
    *
    * @return <code>true</code> if region normalizer ran, <code>false</code> otherwise.
+   * @throws IOException if a remote or network exception occurs
    */
   boolean normalize() throws IOException;
 
@@ -772,6 +838,7 @@ public interface Admin extends Abortable, Closeable {
    * Query the current state of the region normalizer.
    *
    * @return <code>true</code> if region normalizer is enabled, <code>false</code> otherwise.
+   * @throws IOException if a remote or network exception occurs
    */
   boolean isNormalizerEnabled() throws IOException;
 
@@ -779,6 +846,7 @@ public interface Admin extends Abortable, Closeable {
    * Turn region normalizer on or off.
    *
    * @return Previous normalizer value
+   * @throws IOException if a remote or network exception occurs
    */
   boolean normalizerSwitch(boolean on) throws IOException;
 
@@ -787,6 +855,7 @@ public interface Admin extends Abortable, Closeable {
    *
    * @param onOrOff if <code>true</code> enables the catalog janitor
    * @return the previous state
+   * @throws IOException if a remote or network exception occurs
    */
   boolean catalogJanitorSwitch(boolean onOrOff) throws IOException;
 
@@ -794,12 +863,14 @@ public interface Admin extends Abortable, Closeable {
    * Ask for a scan of the catalog table.
    *
    * @return the number of entries cleaned
+   * @throws IOException if a remote or network exception occurs
    */
   int runCatalogJanitor() throws IOException;
 
   /**
    * Query on the catalog janitor state (Enabled/Disabled?).
    *
+   * @throws IOException if a remote or network exception occurs
    */
   boolean isCatalogJanitorEnabled() throws IOException;
 
@@ -808,7 +879,7 @@ public interface Admin extends Abortable, Closeable {
    *
    * @param onOrOff if <code>true</code> enables the cleaner chore
    * @return the previous state
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   boolean cleanerChoreSwitch(boolean onOrOff) throws IOException;
 
@@ -816,14 +887,14 @@ public interface Admin extends Abortable, Closeable {
    * Ask for cleaner chore to run.
    *
    * @return <code>true</code> if cleaner chore ran, <code>false</code> otherwise
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   boolean runCleanerChore() throws IOException;
 
   /**
    * Query on the cleaner chore state (Enabled/Disabled?).
    *
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   boolean isCleanerChoreEnabled() throws IOException;
 
@@ -834,6 +905,7 @@ public interface Admin extends Abortable, Closeable {
    * @param nameOfRegionB encoded or full name of region b
    * @param forcible <code>true</code> if do a compulsory merge, otherwise we will only merge two
    *          adjacent regions
+   * @throws IOException if a remote or network exception occurs
    */
   default Future<Void> mergeRegionsAsync(byte[] nameOfRegionA, byte[] nameOfRegionB,
       boolean forcible) throws IOException {
@@ -852,26 +924,32 @@ public interface Admin extends Abortable, Closeable {
    * @param nameofRegionsToMerge encoded or full name of daughter regions
    * @param forcible <code>true</code> if do a compulsory merge, otherwise we will only merge
    *          adjacent regions
+   * @throws IOException if a remote or network exception occurs
    */
   Future<Void> mergeRegionsAsync(byte[][] nameofRegionsToMerge, boolean forcible)
       throws IOException;
 
   /**
    * Split a table. The method will execute split action for each region in table.
-   * Asynchronous operation.
    * @param tableName table to split
    * @throws IOException if a remote or network exception occurs
    */
   void split(TableName tableName) throws IOException;
 
   /**
-   * Split a table. Asynchronous operation.
-   *
+   * Split a table.
    * @param tableName table to split
    * @param splitPoint the explicit position to split on
    * @throws IOException if a remote or network exception occurs
    */
   void split(TableName tableName, byte[] splitPoint) throws IOException;
+
+  /**
+   * Split an individual region. Asynchronous operation.
+   * @param regionName region to split
+   * @throws IOException if a remote or network exception occurs
+   */
+  Future<Void> splitRegionAsync(byte[] regionName) throws IOException;
 
   /**
    * Split an individual region. Asynchronous operation.
@@ -984,7 +1062,7 @@ public interface Admin extends Abortable, Closeable {
    * @throws IOException if a remote or network exception occurs
    */
   default Collection<ServerName> getRegionServers() throws IOException {
-    return getClusterMetrics(EnumSet.of(Option.LIVE_SERVERS)).getLiveServerMetrics().keySet();
+    return getClusterMetrics(EnumSet.of(Option.SERVERS_NAME)).getServersName();
   }
 
   /**
@@ -994,9 +1072,7 @@ public interface Admin extends Abortable, Closeable {
    * @return a {@link RegionMetrics} list of all regions hosted on a region server
    * @throws IOException if a remote or network exception occurs
    */
-  default List<RegionMetrics> getRegionMetrics(ServerName serverName) throws IOException {
-    return getRegionMetrics(serverName, null);
-  }
+  List<RegionMetrics> getRegionMetrics(ServerName serverName) throws IOException;
 
   /**
    * Get {@link RegionMetrics} of all regions hosted on a regionserver for a table.
@@ -1018,6 +1094,7 @@ public interface Admin extends Abortable, Closeable {
    * Create a new namespace. Blocks until namespace has been successfully created or an exception is
    * thrown.
    * @param descriptor descriptor which describes the new namespace.
+   * @throws IOException if a remote or network exception occurs
    */
   default void createNamespace(NamespaceDescriptor descriptor) throws IOException {
     get(createNamespaceAsync(descriptor), getSyncWaitTimeout(), TimeUnit.MILLISECONDS);
@@ -1028,6 +1105,7 @@ public interface Admin extends Abortable, Closeable {
    * @param descriptor descriptor which describes the new namespace
    * @return the result of the async create namespace operation. Use Future.get(long, TimeUnit) to
    *         wait on the operation to complete.
+   * @throws IOException if a remote or network exception occurs
    */
   Future<Void> createNamespaceAsync(NamespaceDescriptor descriptor) throws IOException;
 
@@ -1035,6 +1113,7 @@ public interface Admin extends Abortable, Closeable {
    * Modify an existing namespace. Blocks until namespace has been successfully modified or an
    * exception is thrown.
    * @param descriptor descriptor which describes the new namespace
+   * @throws IOException if a remote or network exception occurs
    */
   default void modifyNamespace(NamespaceDescriptor descriptor) throws IOException {
     get(modifyNamespaceAsync(descriptor), getSyncWaitTimeout(), TimeUnit.MILLISECONDS);
@@ -1045,6 +1124,7 @@ public interface Admin extends Abortable, Closeable {
    * @param descriptor descriptor which describes the new namespace
    * @return the result of the async modify namespace operation. Use Future.get(long, TimeUnit) to
    *         wait on the operation to complete.
+   * @throws IOException if a remote or network exception occurs
    */
   Future<Void> modifyNamespaceAsync(NamespaceDescriptor descriptor) throws IOException;
 
@@ -1052,6 +1132,7 @@ public interface Admin extends Abortable, Closeable {
    * Delete an existing namespace. Only empty namespaces (no tables) can be removed. Blocks until
    * namespace has been successfully deleted or an exception is thrown.
    * @param name namespace name
+   * @throws IOException if a remote or network exception occurs
    */
   default void deleteNamespace(String name) throws IOException {
     get(deleteNamespaceAsync(name), getSyncWaitTimeout(), TimeUnit.MILLISECONDS);
@@ -1062,6 +1143,7 @@ public interface Admin extends Abortable, Closeable {
    * @param name namespace name
    * @return the result of the async delete namespace operation. Use Future.get(long, TimeUnit) to
    *         wait on the operation to complete.
+   * @throws IOException if a remote or network exception occurs
    */
   Future<Void> deleteNamespaceAsync(String name) throws IOException;
 
@@ -1076,8 +1158,18 @@ public interface Admin extends Abortable, Closeable {
       throws NamespaceNotFoundException, IOException;
 
   /**
-   * List available namespace descriptors.
+   * List available namespaces
+   *
+   * @return List of namespace names
+   * @throws IOException if a remote or network exception occurs
+   */
+  String[] listNamespaces() throws IOException;
+
+  /**
+   * List available namespace descriptors
+   *
    * @return List of descriptors
+   * @throws IOException if a remote or network exception occurs
    */
   NamespaceDescriptor[] listNamespaceDescriptors() throws IOException;
 
@@ -1085,6 +1177,7 @@ public interface Admin extends Abortable, Closeable {
    * Get list of table descriptors by namespace.
    * @param name namespace name
    * @return returns a list of TableDescriptors
+   * @throws IOException if a remote or network exception occurs
    */
   List<TableDescriptor> listTableDescriptorsByNamespace(byte[] name) throws IOException;
 
@@ -1092,6 +1185,7 @@ public interface Admin extends Abortable, Closeable {
    * Get list of table names by namespace.
    * @param name namespace name
    * @return The list of table names in the namespace
+   * @throws IOException if a remote or network exception occurs
    */
   TableName[] listTableNamesByNamespace(String name) throws IOException;
 
@@ -1100,6 +1194,7 @@ public interface Admin extends Abortable, Closeable {
    *
    * @param tableName the name of the table
    * @return List of {@link RegionInfo}.
+   * @throws IOException if a remote or network exception occurs
    */
   List<RegionInfo> getRegions(TableName tableName) throws IOException;
 
@@ -1124,8 +1219,9 @@ public interface Admin extends Abortable, Closeable {
    * @param mayInterruptIfRunning if the proc completed at least one step, should it be aborted?
    * @return <code>true</code> if aborted, <code>false</code> if procedure already completed or does
    *         not exist
-   * @throws IOException
-   * @deprecated Since 2.1.1 -- to be removed.
+   * @throws IOException if a remote or network exception occurs
+   * @deprecated since 2.1.1 and will be removed in 4.0.0.
+   * @see <a href="https://issues.apache.org/jira/browse/HBASE-21223">HBASE-21223</a>
    */
   @Deprecated
   default boolean abortProcedure(long procId, boolean mayInterruptIfRunning) throws IOException {
@@ -1144,8 +1240,9 @@ public interface Admin extends Abortable, Closeable {
    * @param procId ID of the procedure to abort
    * @param mayInterruptIfRunning if the proc completed at least one step, should it be aborted?
    * @return <code>true</code> if aborted, <code>false</code> if procedure already completed or does not exist
-   * @throws IOException
-   * @deprecated Since 2.1.1 -- to be removed.
+   * @throws IOException if a remote or network exception occurs
+   * @deprecated since 2.1.1 and will be removed in 4.0.0.
+   * @see <a href="https://issues.apache.org/jira/browse/HBASE-21223">HBASE-21223</a>
    */
   @Deprecated
   Future<Boolean> abortProcedureAsync(long procId, boolean mayInterruptIfRunning)
@@ -1154,7 +1251,7 @@ public interface Admin extends Abortable, Closeable {
   /**
    * Get procedures.
    * @return procedure list in JSON
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   String getProcedures() throws IOException;
 
@@ -1245,9 +1342,10 @@ public interface Admin extends Abortable, Closeable {
 
   /**
    * Take a snapshot for the given table. If the table is enabled, a FLUSH-type snapshot will be
-   * taken. If the table is disabled, an offline snapshot is taken. Snapshots are considered unique
-   * based on <b>the name of the snapshot</b>. Attempts to take a snapshot with the same name (even
-   * a different type or with different parameters) will fail with a
+   * taken. If the table is disabled, an offline snapshot is taken. Snapshots are taken
+   * sequentially even when requested concurrently, across all tables. Snapshots are considered
+   * unique based on <b>the name of the snapshot</b>. Attempts to take a snapshot with the same
+   * name (even a different type or with different parameters) will fail with a
    * {@link org.apache.hadoop.hbase.snapshot.SnapshotCreationException} indicating the duplicate
    * naming. Snapshot names follow the same naming constraints as tables in HBase. See
    * {@link org.apache.hadoop.hbase.TableName#isLegalFullyQualifiedTableName(byte[])}.
@@ -1264,7 +1362,8 @@ public interface Admin extends Abortable, Closeable {
 
   /**
    * Create typed snapshot of the table. Snapshots are considered unique based on <b>the name of the
-   * snapshot</b>. Attempts to take a snapshot with the same name (even a different type or with
+   * snapshot</b>. Snapshots are taken sequentially even when requested concurrently, across
+   * all tables. Attempts to take a snapshot with the same name (even a different type or with
    * different parameters) will fail with a {@link SnapshotCreationException} indicating the
    * duplicate naming. Snapshot names follow the same naming constraints as tables in HBase. See
    * {@link org.apache.hadoop.hbase.TableName#isLegalFullyQualifiedTableName(byte[])}.
@@ -1282,13 +1381,59 @@ public interface Admin extends Abortable, Closeable {
   }
 
   /**
-   * Take a snapshot and wait for the server to complete that snapshot (blocking). Only a single
-   * snapshot should be taken at a time for an instance of HBase, or results may be undefined (you
-   * can tell multiple HBase clusters to snapshot at the same time, but only one at a time for a
-   * single cluster). Snapshots are considered unique based on <b>the name of the snapshot</b>.
-   * Attempts to take a snapshot with the same name (even a different type or with different
-   * parameters) will fail with a {@link SnapshotCreationException} indicating the duplicate naming.
-   * Snapshot names follow the same naming constraints as tables in HBase. See
+   * Create typed snapshot of the table. Snapshots are considered unique based on <b>the name of the
+   * snapshot</b>. Snapshots are taken sequentially even when requested concurrently, across
+   * all tables. Attempts to take a snapshot with the same name (even a different type or with
+   * different parameters) will fail with a {@link SnapshotCreationException} indicating the
+   * duplicate naming. Snapshot names follow the same naming constraints as tables in HBase. See
+   * {@link org.apache.hadoop.hbase.TableName#isLegalFullyQualifiedTableName(byte[])}.
+   * Snapshot can live with ttl seconds.
+   *
+   * @param snapshotName  name to give the snapshot on the filesystem. Must be unique from all other
+   *                      snapshots stored on the cluster
+   * @param tableName     name of the table to snapshot
+   * @param type          type of snapshot to take
+   * @param snapshotProps snapshot additional properties e.g. TTL
+   * @throws IOException               we fail to reach the master
+   * @throws SnapshotCreationException if snapshot creation failed
+   * @throws IllegalArgumentException  if the snapshot request is formatted incorrectly
+   */
+  default void snapshot(String snapshotName, TableName tableName, SnapshotType type,
+                        Map<String, Object> snapshotProps) throws IOException,
+      SnapshotCreationException, IllegalArgumentException {
+    snapshot(new SnapshotDescription(snapshotName, tableName, type, snapshotProps));
+  }
+
+  /**
+   * Create typed snapshot of the table. Snapshots are considered unique based on <b>the name of the
+   * snapshot</b>. Snapshots are taken sequentially even when requested concurrently, across
+   * all tables. Attempts to take a snapshot with the same name (even a different type or with
+   * different parameters) will fail with a {@link SnapshotCreationException} indicating the
+   * duplicate naming. Snapshot names follow the same naming constraints as tables in HBase. See
+   * {@link org.apache.hadoop.hbase.TableName#isLegalFullyQualifiedTableName(byte[])}.
+   * Snapshot can live with ttl seconds.
+   *
+   * @param snapshotName  name to give the snapshot on the filesystem. Must be unique from all other
+   *                      snapshots stored on the cluster
+   * @param tableName     name of the table to snapshot
+   * @param snapshotProps snapshot additional properties e.g. TTL
+   * @throws IOException               we fail to reach the master
+   * @throws SnapshotCreationException if snapshot creation failed
+   * @throws IllegalArgumentException  if the snapshot request is formatted incorrectly
+   */
+  default void snapshot(String snapshotName, TableName tableName,
+                        Map<String, Object> snapshotProps) throws IOException,
+      SnapshotCreationException, IllegalArgumentException {
+    snapshot(new SnapshotDescription(snapshotName, tableName, SnapshotType.FLUSH, snapshotProps));
+  }
+
+  /**
+   * Take a snapshot and wait for the server to complete that snapshot (blocking). Snapshots are
+   * considered unique based on <b>the name of the snapshot</b>. Snapshots are taken sequentially
+   * even when requested concurrently, across all tables. Attempts to take a snapshot with the same
+   * name (even a different type or with different parameters) will fail with a
+   * {@link SnapshotCreationException} indicating the duplicate naming. Snapshot names follow the
+   * same naming constraints as tables in HBase. See
    * {@link org.apache.hadoop.hbase.TableName#isLegalFullyQualifiedTableName(byte[])}. You should
    * probably use {@link #snapshot(String, org.apache.hadoop.hbase.TableName)} unless you are sure
    * about the type of snapshot that you want to take.
@@ -1301,8 +1446,9 @@ public interface Admin extends Abortable, Closeable {
       throws IOException, SnapshotCreationException, IllegalArgumentException;
 
   /**
-   * Take a snapshot without waiting for the server to complete that snapshot (asynchronous) Only a
-   * single snapshot should be taken at a time, or results may be undefined.
+   * Take a snapshot without waiting for the server to complete that snapshot (asynchronous).
+   * Snapshots are considered unique based on <b>the name of the snapshot</b>. Snapshots are taken
+   * sequentially even when requested concurrently, across all tables.
    *
    * @param snapshot snapshot to take
    * @throws IOException if the snapshot did not succeed or we lose contact with the master.
@@ -1448,7 +1594,7 @@ public interface Admin extends Abortable, Closeable {
    * @param instance The instance name of the procedure. For some procedures, this parameter is
    * optional.
    * @param props Property/Value pairs of properties passing to the procedure
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   void execProcedure(String signature, String instance, Map<String, String> props)
       throws IOException;
@@ -1462,7 +1608,7 @@ public interface Admin extends Abortable, Closeable {
    * optional.
    * @param props Property/Value pairs of properties passing to the procedure
    * @return data returned after procedure execution. null if no return data.
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   byte[] execProcedureWithReturn(String signature, String instance, Map<String, String> props)
       throws IOException;
@@ -1508,14 +1654,6 @@ public interface Admin extends Abortable, Closeable {
    */
   List<SnapshotDescription> listTableSnapshots(Pattern tableNamePattern,
       Pattern snapshotNamePattern) throws IOException;
-
-  /**
-   * Delete an existing snapshot.
-   *
-   * @param snapshotName name of the snapshot
-   * @throws IOException if a remote or network exception occurs
-   */
-  void deleteSnapshot(byte[] snapshotName) throws IOException;
 
   /**
    * Delete an existing snapshot.
@@ -1574,7 +1712,10 @@ public interface Admin extends Abortable, Closeable {
    * </pre></blockquote></div>
    *
    * @return A MasterCoprocessorRpcChannel instance
+   * @deprecated since 3.0.0, will removed in 4.0.0. This is too low level, please stop using it any
+   *             more. Use the coprocessorService methods in {@link AsyncAdmin} instead.
    */
+  @Deprecated
   CoprocessorRpcChannel coprocessorService();
 
 
@@ -1599,7 +1740,10 @@ public interface Admin extends Abortable, Closeable {
    *
    * @param serverName the server name to which the endpoint call is made
    * @return A RegionServerCoprocessorRpcChannel instance
+   * @deprecated since 3.0.0, will removed in 4.0.0. This is too low level, please stop using it any
+   *             more. Use the coprocessorService methods in {@link AsyncAdmin} instead.
    */
+  @Deprecated
   CoprocessorRpcChannel coprocessorService(ServerName serverName);
 
 
@@ -1607,22 +1751,21 @@ public interface Admin extends Abortable, Closeable {
    * Update the configuration and trigger an online config change
    * on the regionserver.
    * @param server : The server whose config needs to be updated.
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   void updateConfiguration(ServerName server) throws IOException;
-
 
   /**
    * Update the configuration and trigger an online config change
    * on all the regionservers.
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   void updateConfiguration() throws IOException;
 
   /**
    * Get the info port of the current master if one is available.
    * @return master info port
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    */
   default int getMasterInfoPort() throws IOException {
     return getClusterMetrics(EnumSet.of(Option.MASTER_INFO_PORT)).getMasterInfoPort();
@@ -1630,7 +1773,7 @@ public interface Admin extends Abortable, Closeable {
 
   /**
    * Return the set of supported security capabilities.
-   * @throws IOException
+   * @throws IOException if a remote or network exception occurs
    * @throws UnsupportedOperationException
    */
   List<SecurityCapability> getSecurityCapabilities() throws IOException;
@@ -1641,6 +1784,7 @@ public interface Admin extends Abortable, Closeable {
    * @param synchronous If <code>true</code>, it waits until current split() call, if outstanding,
    *          to return.
    * @return Previous switch value
+   * @throws IOException if a remote or network exception occurs
    */
   boolean splitSwitch(boolean enabled, boolean synchronous) throws IOException;
 
@@ -1650,18 +1794,21 @@ public interface Admin extends Abortable, Closeable {
    * @param synchronous If <code>true</code>, it waits until current merge() call, if outstanding,
    *          to return.
    * @return Previous switch value
+   * @throws IOException if a remote or network exception occurs
    */
   boolean mergeSwitch(boolean enabled, boolean synchronous) throws IOException;
 
   /**
    * Query the current state of the split switch.
    * @return <code>true</code> if the switch is enabled, <code>false</code> otherwise.
+   * @throws IOException if a remote or network exception occurs
    */
   boolean isSplitEnabled() throws IOException;
 
   /**
    * Query the current state of the merge switch.
    * @return <code>true</code> if the switch is enabled, <code>false</code> otherwise.
+   * @throws IOException if a remote or network exception occurs
    */
   boolean isMergeEnabled() throws IOException;
 
@@ -1917,12 +2064,14 @@ public interface Admin extends Abortable, Closeable {
    * movements. Region unloading is asynchronous.
    * @param servers The list of servers to decommission.
    * @param offload True to offload the regions from the decommissioned servers
+   * @throws IOException if a remote or network exception occurs
    */
   void decommissionRegionServers(List<ServerName> servers, boolean offload) throws IOException;
 
   /**
    * List region servers marked as decommissioned, which can not be assigned regions.
    * @return List of decommissioned region servers.
+   * @throws IOException if a remote or network exception occurs
    */
   List<ServerName> listDecommissionedRegionServers() throws IOException;
 
@@ -1932,6 +2081,7 @@ public interface Admin extends Abortable, Closeable {
    * asynchronous.
    * @param server The server to recommission.
    * @param encodedRegionNames Regions to load onto the server.
+   * @throws IOException if a remote or network exception occurs
    */
   void recommissionRegionServer(ServerName server, List<byte[]> encodedRegionNames)
       throws IOException;
@@ -1939,6 +2089,7 @@ public interface Admin extends Abortable, Closeable {
   /**
    * Find all table and column families that are replicated from this cluster
    * @return the replicated table-cfs list of this cluster.
+   * @throws IOException if a remote or network exception occurs
    */
   List<TableCFs> listReplicatedTableCFs() throws IOException;
 
@@ -1996,12 +2147,14 @@ public interface Admin extends Abortable, Closeable {
    * Switch the rpc throttle enable state.
    * @param enable Set to <code>true</code> to enable, <code>false</code> to disable.
    * @return Previous rpc throttle enabled value
+   * @throws IOException if a remote or network exception occurs
    */
   boolean switchRpcThrottle(boolean enable) throws IOException;
 
   /**
    * Get if the rpc throttle is enabled.
    * @return True if rpc throttle is enabled
+   * @throws IOException if a remote or network exception occurs
    */
   boolean isRpcThrottleEnabled() throws IOException;
 
@@ -2010,16 +2163,19 @@ public interface Admin extends Abortable, Closeable {
    * can be exceeded if region server has availble quota.
    * @param enable Set to <code>true</code> to enable, <code>false</code> to disable.
    * @return Previous exceed throttle enabled value
+   * @throws IOException if a remote or network exception occurs
    */
   boolean exceedThrottleQuotaSwitch(final boolean enable) throws IOException;
 
   /**
    * Fetches the table sizes on the filesystem as tracked by the HBase Master.
+   * @throws IOException if a remote or network exception occurs
    */
   Map<TableName, Long> getSpaceQuotaTableSizes() throws IOException;
 
   /**
    * Fetches the observed {@link SpaceQuotaSnapshotView}s observed by a RegionServer.
+   * @throws IOException if a remote or network exception occurs
    */
   Map<TableName, ? extends SpaceQuotaSnapshotView> getRegionServerSpaceQuotaSnapshots(
       ServerName serverName) throws IOException;
@@ -2027,12 +2183,14 @@ public interface Admin extends Abortable, Closeable {
   /**
    * Returns the Master's view of a quota on the given {@code namespace} or null if the Master has
    * no quota information on that namespace.
+   * @throws IOException if a remote or network exception occurs
    */
   SpaceQuotaSnapshotView getCurrentSpaceQuotaSnapshot(String namespace) throws IOException;
 
   /**
    * Returns the Master's view of a quota on the given {@code tableName} or null if the Master has
    * no quota information on that table.
+   * @throws IOException if a remote or network exception occurs
    */
   SpaceQuotaSnapshotView getCurrentSpaceQuotaSnapshot(TableName tableName) throws IOException;
 
@@ -2052,4 +2210,56 @@ public interface Admin extends Abortable, Closeable {
    * @throws IOException if a remote or network exception occurs
    */
   void revoke(UserPermission userPermission) throws IOException;
+
+  /**
+   * Get the global/namespace/table permissions for user
+   * @param getUserPermissionsRequest A request contains which user, global, namespace or table
+   *          permissions needed
+   * @return The user and permission list
+   * @throws IOException if a remote or network exception occurs
+   */
+  List<UserPermission> getUserPermissions(GetUserPermissionsRequest getUserPermissionsRequest)
+      throws IOException;
+
+  /**
+   * Check if the user has specific permissions
+   * @param userName the user name
+   * @param permissions the specific permission list
+   * @return True if user has the specific permissions
+   * @throws IOException if a remote or network exception occurs
+   */
+  List<Boolean> hasUserPermissions(String userName, List<Permission> permissions)
+      throws IOException;
+
+  /**
+   * Check if call user has specific permissions
+   * @param permissions the specific permission list
+   * @return True if user has the specific permissions
+   * @throws IOException if a remote or network exception occurs
+   */
+  default List<Boolean> hasUserPermissions(List<Permission> permissions) throws IOException {
+    return hasUserPermissions(null, permissions);
+  }
+
+  /**
+   * Turn on or off the auto snapshot cleanup based on TTL.
+   *
+   * @param on Set to <code>true</code> to enable, <code>false</code> to disable.
+   * @param synchronous If <code>true</code>, it waits until current snapshot cleanup is completed,
+   *   if outstanding.
+   * @return Previous auto snapshot cleanup value
+   * @throws IOException if a remote or network exception occurs
+   */
+  boolean snapshotCleanupSwitch(final boolean on, final boolean synchronous)
+      throws IOException;
+
+  /**
+   * Query the current state of the auto snapshot cleanup based on TTL.
+   *
+   * @return <code>true</code> if the auto snapshot cleanup is enabled,
+   *   <code>false</code> otherwise.
+   * @throws IOException if a remote or network exception occurs
+   */
+  boolean isSnapshotCleanupEnabled() throws IOException;
+
 }

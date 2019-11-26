@@ -190,13 +190,13 @@ public class TestMaster {
     HColumnDescriptor hcd = new HColumnDescriptor("value");
     htd.addFamily(hcd);
 
-    admin.createTable(htd, null);
+    admin.createTable(htd);
     try {
       RegionInfo hri = RegionInfoBuilder.newBuilder(tableName)
           .setStartKey(Bytes.toBytes("A"))
           .setEndKey(Bytes.toBytes("Z"))
           .build();
-      admin.move(hri.getEncodedNameAsBytes(), null);
+      admin.move(hri.getEncodedNameAsBytes());
       fail("Region should not be moved since it is fake");
     } catch (IOException ioe) {
       assertTrue(ioe instanceof UnknownRegionException);
@@ -213,12 +213,12 @@ public class TestMaster {
     HColumnDescriptor hcd = new HColumnDescriptor("value");
     htd.addFamily(hcd);
 
-    admin.createTable(htd, null);
+    admin.createTable(htd);
     try {
       List<RegionInfo> tableRegions = admin.getRegions(tableName);
 
       master.setInitialized(false); // fake it, set back later
-      admin.move(tableRegions.get(0).getEncodedNameAsBytes(), null);
+      admin.move(tableRegions.get(0).getEncodedNameAsBytes());
       fail("Region should not be moved since master is not initialized");
     } catch (IOException ioe) {
       assertTrue(StringUtils.stringifyException(ioe).contains("PleaseHoldException"));

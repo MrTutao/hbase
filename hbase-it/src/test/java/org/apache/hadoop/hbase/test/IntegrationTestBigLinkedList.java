@@ -25,7 +25,6 @@ import java.io.InterruptedIOException;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.EnumSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
@@ -42,7 +41,6 @@ import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.ClusterMetrics.Option;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -66,7 +64,6 @@ import org.apache.hadoop.hbase.client.RegionLocator;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.client.ScannerCallable;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
@@ -745,9 +742,7 @@ public class IntegrationTestBigLinkedList extends IntegrationTestBase {
           // If we want to pre-split compute how many splits.
           if (conf.getBoolean(HBaseTestingUtility.PRESPLIT_TEST_TABLE_KEY,
               HBaseTestingUtility.PRESPLIT_TEST_TABLE)) {
-            int numberOfServers =
-                admin.getClusterMetrics(EnumSet.of(Option.LIVE_SERVERS))
-                    .getLiveServerMetrics().size();
+            int numberOfServers = admin.getRegionServers().size();
             if (numberOfServers == 0) {
               throw new IllegalStateException("No live regionservers");
             }
@@ -1981,8 +1976,6 @@ public class IntegrationTestBigLinkedList extends IntegrationTestBase {
   }
 
   public static void setJobScannerConf(Job job) {
-    // Make sure scanners log something useful to make debugging possible.
-    job.getConfiguration().setBoolean(ScannerCallable.LOG_SCANNER_ACTIVITY, true);
     job.getConfiguration().setInt(TableRecordReaderImpl.LOG_PER_ROW_COUNT, 100000);
   }
 

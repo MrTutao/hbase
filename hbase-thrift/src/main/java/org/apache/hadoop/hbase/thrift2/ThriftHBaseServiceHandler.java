@@ -69,7 +69,7 @@ import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.thrift.HBaseServiceHandler;
 import org.apache.hadoop.hbase.thrift2.generated.TAppend;
 import org.apache.hadoop.hbase.thrift2.generated.TColumnFamilyDescriptor;
-import org.apache.hadoop.hbase.thrift2.generated.TCompareOp;
+import org.apache.hadoop.hbase.thrift2.generated.TCompareOperator;
 import org.apache.hadoop.hbase.thrift2.generated.TDelete;
 import org.apache.hadoop.hbase.thrift2.generated.TGet;
 import org.apache.hadoop.hbase.thrift2.generated.THBaseService;
@@ -227,7 +227,7 @@ public class ThriftHBaseServiceHandler extends HBaseServiceHandler implements TH
   public List<Boolean> existsAll(ByteBuffer table, List<TGet> gets) throws TIOError, TException {
     Table htable = getTable(table);
     try {
-      boolean[] exists = htable.existsAll(getsFromThrift(gets));
+      boolean[] exists = htable.exists(getsFromThrift(gets));
       List<Boolean> result = new ArrayList<>(exists.length);
       for (boolean exist : exists) {
         result.add(exist);
@@ -340,7 +340,8 @@ public class ThriftHBaseServiceHandler extends HBaseServiceHandler implements TH
   
   @Override
   public boolean checkAndMutate(ByteBuffer table, ByteBuffer row, ByteBuffer family,
-      ByteBuffer qualifier, TCompareOp compareOp, ByteBuffer value, TRowMutations rowMutations)
+      ByteBuffer qualifier, TCompareOperator compareOp, ByteBuffer value,
+      TRowMutations rowMutations)
           throws TIOError, TException {
     checkReadOnlyMode();
     try (final Table htable = getTable(table)) {
@@ -625,7 +626,11 @@ public class ThriftHBaseServiceHandler extends HBaseServiceHandler implements TH
     try {
       TableDescriptor descriptor = tableDescriptorFromThrift(desc);
       byte[][] split = splitKeyFromThrift(splitKeys);
-      connectionCache.getAdmin().createTable(descriptor, split);
+      if (split != null) {
+        connectionCache.getAdmin().createTable(descriptor, split);
+      } else {
+        connectionCache.getAdmin().createTable(descriptor);
+      }
     } catch (IOException e) {
       throw getTIOError(e);
     }
@@ -787,6 +792,20 @@ public class ThriftHBaseServiceHandler extends HBaseServiceHandler implements TH
     try {
       NamespaceDescriptor descriptor = connectionCache.getAdmin().getNamespaceDescriptor(name);
       return namespaceDescriptorFromHBase(descriptor);
+    } catch (IOException e) {
+      throw getTIOError(e);
+    }
+  }
+
+  @Override
+  public List<String> listNamespaces() throws TIOError, TException {
+    try {
+      String[] namespaces = connectionCache.getAdmin().listNamespaces();
+      List<String> result = new ArrayList<>(namespaces.length);
+      for (String ns: namespaces) {
+        result.add(ns);
+      }
+      return result;
     } catch (IOException e) {
       throw getTIOError(e);
     }

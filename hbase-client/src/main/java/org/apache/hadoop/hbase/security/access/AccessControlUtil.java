@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hbase.HConstants;
@@ -56,6 +57,7 @@ public class AccessControlUtil {
    * @param qualifier optional qualifier
    * @param actions the permissions to be granted
    * @return A {@link AccessControlProtos} GrantRequest
+   * @throws NullPointerException if {@code tableName} is {@code null}
    */
   public static AccessControlProtos.GrantRequest buildGrantRequest(
       String username, TableName tableName, byte[] family, byte[] qualifier,
@@ -67,9 +69,9 @@ public class AccessControlUtil {
     for (AccessControlProtos.Permission.Action a : actions) {
       permissionBuilder.addAction(a);
     }
-    if (tableName == null) {
-      throw new NullPointerException("TableName cannot be null");
-    }
+
+    Objects.requireNonNull(tableName, "TableName cannot be null");
+
     permissionBuilder.setTableName(ProtobufUtil.toProtoTableName(tableName));
 
     if (family != null) {
@@ -654,7 +656,9 @@ public class AccessControlUtil {
    * @param controller RpcController
    * @param protocol the AccessControlService protocol proxy
    * @throws ServiceException on failure
+   * @deprecated Use {@link Admin#getUserPermissions(GetUserPermissionsRequest)} instead.
    */
+  @Deprecated
   public static List<UserPermission> getUserPermissions(RpcController controller,
       AccessControlService.BlockingInterface protocol) throws ServiceException {
     return getUserPermissions(controller, protocol, HConstants.EMPTY_STRING);
@@ -666,7 +670,9 @@ public class AccessControlUtil {
    * @param protocol the AccessControlService protocol proxy
    * @param userName User name, if empty then all user permissions will be retrieved.
    * @throws ServiceException
+   * @deprecated Use {@link Admin#getUserPermissions(GetUserPermissionsRequest)} instead.
    */
+  @Deprecated
   public static List<UserPermission> getUserPermissions(RpcController controller,
       AccessControlService.BlockingInterface protocol, String userName) throws ServiceException {
     AccessControlProtos.GetUserPermissionsRequest.Builder builder =
@@ -695,7 +701,9 @@ public class AccessControlUtil {
    * @param protocol the AccessControlService protocol proxy
    * @param t optional table name
    * @throws ServiceException
+   * @deprecated Use {@link Admin#getUserPermissions(GetUserPermissionsRequest)} instead.
    */
+  @Deprecated
   public static List<UserPermission> getUserPermissions(RpcController controller,
       AccessControlService.BlockingInterface protocol,
       TableName t) throws ServiceException {
@@ -712,7 +720,9 @@ public class AccessControlUtil {
    * @param columnQualifier Column qualifier
    * @param userName User name, if empty then all user permissions will be retrieved.
    * @throws ServiceException
+   * @deprecated Use {@link Admin#getUserPermissions(GetUserPermissionsRequest)} instead.
    */
+  @Deprecated
   public static List<UserPermission> getUserPermissions(RpcController controller,
       AccessControlService.BlockingInterface protocol, TableName t, byte[] columnFamily,
       byte[] columnQualifier, String userName) throws ServiceException {
@@ -751,7 +761,9 @@ public class AccessControlUtil {
    * @param protocol the AccessControlService protocol proxy
    * @param namespace name of the namespace
    * @throws ServiceException
+   * @deprecated Use {@link Admin#getUserPermissions(GetUserPermissionsRequest)} instead.
    */
+  @Deprecated
   public static List<UserPermission> getUserPermissions(RpcController controller,
       AccessControlService.BlockingInterface protocol,
       byte[] namespace) throws ServiceException {
@@ -765,7 +777,9 @@ public class AccessControlUtil {
    * @param namespace name of the namespace
    * @param userName User name, if empty then all user permissions will be retrieved.
    * @throws ServiceException
+   * @deprecated Use {@link Admin#getUserPermissions(GetUserPermissionsRequest)} instead.
    */
+  @Deprecated
   public static List<UserPermission> getUserPermissions(RpcController controller,
       AccessControlService.BlockingInterface protocol, byte[] namespace, String userName)
       throws ServiceException {
@@ -803,7 +817,9 @@ public class AccessControlUtil {
    * @param actions Actions
    * @return true if access allowed, otherwise false
    * @throws ServiceException
+   * @deprecated Use {@link Admin#hasUserPermissions(String, List)} instead.
    */
+  @Deprecated
   public static boolean hasPermission(RpcController controller,
       AccessControlService.BlockingInterface protocol, TableName tableName, byte[] columnFamily,
       byte[] columnQualifier, String userName, Permission.Action[] actions)

@@ -35,7 +35,6 @@ import org.apache.hadoop.hbase.CompareOperator;
 import org.apache.hadoop.hbase.ExtendedCellBuilder;
 import org.apache.hadoop.hbase.ExtendedCellBuilderFactory;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.KeepDeletedCells;
@@ -54,6 +53,7 @@ import org.apache.hadoop.hbase.client.Increment;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.OperationWithAttributes;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.RowMutations;
 import org.apache.hadoop.hbase.client.Scan;
@@ -77,7 +77,7 @@ import org.apache.hadoop.hbase.thrift2.generated.TColumn;
 import org.apache.hadoop.hbase.thrift2.generated.TColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.thrift2.generated.TColumnIncrement;
 import org.apache.hadoop.hbase.thrift2.generated.TColumnValue;
-import org.apache.hadoop.hbase.thrift2.generated.TCompareOp;
+import org.apache.hadoop.hbase.thrift2.generated.TCompareOperator;
 import org.apache.hadoop.hbase.thrift2.generated.TCompressionAlgorithm;
 import org.apache.hadoop.hbase.thrift2.generated.TConsistency;
 import org.apache.hadoop.hbase.thrift2.generated.TDataBlockEncoding;
@@ -143,7 +143,7 @@ public final class ThriftUtilities {
     }
 
     if (in.isSetMaxVersions()) {
-      out.setMaxVersions(in.getMaxVersions());
+      out.readVersions(in.getMaxVersions());
     }
 
     if (in.isSetFilterString()) {
@@ -725,7 +725,7 @@ public final class ThriftUtilities {
   }
 
   public static THRegionLocation regionLocationFromHBase(HRegionLocation hrl) {
-    HRegionInfo hri = hrl.getRegionInfo();
+    RegionInfo hri = hrl.getRegion();
     ServerName serverName = hrl.getServerName();
 
     THRegionInfo thRegionInfo = new THRegionInfo();
@@ -783,7 +783,7 @@ public final class ThriftUtilities {
     }
   }
 
-  public static CompareOperator compareOpFromThrift(TCompareOp tCompareOp) {
+  public static CompareOperator compareOpFromThrift(TCompareOperator tCompareOp) {
     switch (tCompareOp.getValue()) {
       case 0: return CompareOperator.LESS;
       case 1: return CompareOperator.LESS_OR_EQUAL;
@@ -1291,7 +1291,7 @@ public final class ThriftUtilities {
             .setTimestamp(cell.getTimestamp())
             .setValue(CellUtil.cloneValue(cell));
         if (cell.getTagsLength() != 0) {
-          columnValue.setTags(CellUtil.cloneTags(cell));
+          columnValue.setTags(PrivateCellUtil.cloneTags(cell));
         }
         out.addToColumnValues(columnValue);
       }
@@ -1356,7 +1356,7 @@ public final class ThriftUtilities {
             .setTimestamp(cell.getTimestamp())
             .setValue(CellUtil.cloneValue(cell));
         if (cell.getTagsLength() != 0) {
-          columnValue.setTags(CellUtil.cloneTags(cell));
+          columnValue.setTags(PrivateCellUtil.cloneTags(cell));
         }
         out.addToColumns(columnValue);
       }
@@ -1432,15 +1432,15 @@ public final class ThriftUtilities {
     return tRowMutations;
   }
 
-  public static TCompareOp compareOpFromHBase(CompareOperator compareOp) {
+  public static TCompareOperator compareOpFromHBase(CompareOperator compareOp) {
     switch (compareOp) {
-      case LESS: return TCompareOp.LESS;
-      case LESS_OR_EQUAL: return TCompareOp.LESS_OR_EQUAL;
-      case EQUAL: return TCompareOp.EQUAL;
-      case NOT_EQUAL: return TCompareOp.NOT_EQUAL;
-      case GREATER_OR_EQUAL: return TCompareOp.GREATER_OR_EQUAL;
-      case GREATER: return TCompareOp.GREATER;
-      case NO_OP: return TCompareOp.NO_OP;
+      case LESS: return TCompareOperator.LESS;
+      case LESS_OR_EQUAL: return TCompareOperator.LESS_OR_EQUAL;
+      case EQUAL: return TCompareOperator.EQUAL;
+      case NOT_EQUAL: return TCompareOperator.NOT_EQUAL;
+      case GREATER_OR_EQUAL: return TCompareOperator.GREATER_OR_EQUAL;
+      case GREATER: return TCompareOperator.GREATER;
+      case NO_OP: return TCompareOperator.NO_OP;
       default: return null;
     }
   }

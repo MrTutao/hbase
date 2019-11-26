@@ -42,6 +42,8 @@ import org.apache.hadoop.hbase.quotas.SpaceQuotaSnapshot;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
 import org.apache.hadoop.hbase.replication.SyncReplicationState;
+import org.apache.hadoop.hbase.security.access.GetUserPermissionsRequest;
+import org.apache.hadoop.hbase.security.access.Permission;
 import org.apache.hadoop.hbase.security.access.UserPermission;
 import org.apache.hadoop.hbase.util.FutureUtils;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -86,6 +88,11 @@ class AsyncHBaseAdmin implements AsyncAdmin {
   public CompletableFuture<List<TableDescriptor>> listTableDescriptors(Pattern pattern,
       boolean includeSysTables) {
     return wrap(rawAdmin.listTableDescriptors(pattern, includeSysTables));
+  }
+
+  @Override
+  public CompletableFuture<List<TableDescriptor>> listTableDescriptors(List<TableName> tableNames) {
+    return wrap(rawAdmin.listTableDescriptors(tableNames));
   }
 
   @Override
@@ -171,11 +178,6 @@ class AsyncHBaseAdmin implements AsyncAdmin {
   }
 
   @Override
-  public CompletableFuture<Boolean> isTableAvailable(TableName tableName, byte[][] splitKeys) {
-    return wrap(rawAdmin.isTableAvailable(tableName, splitKeys));
-  }
-
-  @Override
   public CompletableFuture<Void> addColumnFamily(TableName tableName,
       ColumnFamilyDescriptor columnFamily) {
     return wrap(rawAdmin.addColumnFamily(tableName, columnFamily));
@@ -210,6 +212,11 @@ class AsyncHBaseAdmin implements AsyncAdmin {
   @Override
   public CompletableFuture<NamespaceDescriptor> getNamespaceDescriptor(String name) {
     return wrap(rawAdmin.getNamespaceDescriptor(name));
+  }
+
+  @Override
+  public CompletableFuture<List<String>> listNamespaces() {
+    return wrap(rawAdmin.listNamespaces());
   }
 
   @Override
@@ -807,4 +814,28 @@ class AsyncHBaseAdmin implements AsyncAdmin {
   public CompletableFuture<Void> revoke(UserPermission userPermission) {
     return wrap(rawAdmin.revoke(userPermission));
   }
+
+  @Override
+  public CompletableFuture<List<UserPermission>>
+      getUserPermissions(GetUserPermissionsRequest getUserPermissionsRequest) {
+    return wrap(rawAdmin.getUserPermissions(getUserPermissionsRequest));
+  }
+
+  @Override
+  public CompletableFuture<List<Boolean>> hasUserPermissions(String userName,
+      List<Permission> permissions) {
+    return wrap(rawAdmin.hasUserPermissions(userName, permissions));
+  }
+
+  @Override
+  public CompletableFuture<Boolean> snapshotCleanupSwitch(final boolean on,
+      final boolean sync) {
+    return wrap(rawAdmin.snapshotCleanupSwitch(on, sync));
+  }
+
+  @Override
+  public CompletableFuture<Boolean> isSnapshotCleanupEnabled() {
+    return wrap(rawAdmin.isSnapshotCleanupEnabled());
+  }
+
 }

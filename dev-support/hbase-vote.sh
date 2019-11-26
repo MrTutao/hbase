@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-set -e
+set -e -o pipefail
 
 usage() {
   SCRIPT=$(basename "${BASH_SOURCE[@]}")
@@ -29,7 +29,7 @@ hbase-vote. A script for standard vote which verifies the following items
 4. Built from source
 5. Unit tests
 
-Usage: ${SCRIPT} -s | --source <url> [-k | --key <signature>] [-f | --keys-file-url <url>] [-o | --output-dir </path/to/use>]
+Usage: ${SCRIPT} -s | --source <url> [-k | --key <signature>] [-f | --keys-file-url <url>] [-o | --output-dir </path/to/use>] [-P runSmallTests]
        ${SCRIPT} -h | --help
 
   -h | --help                   Show this screen.
@@ -39,6 +39,7 @@ Usage: ${SCRIPT} -s | --source <url> [-k | --key <signature>] [-f | --keys-file-
   -f | --keys-file-url '<url>'   the URL of the key file, default is
                                 http://www.apache.org/dist/hbase/KEYS
   -o | --output-dir '</path>'   directory which has the stdout and stderr of each verification target
+  -P |                          list of maven profiles to activate for test UT/IT, i.e. <-P runSmallTests> Defaults to runAllTests
 __EOF
 }
 
@@ -54,6 +55,8 @@ while ((${#})); do
       KEY_FILE_URL="${2}"; shift 2  ;;
     -o | --output-dir )
       OUTPUT_DIR="${2}"; shift 2    ;;
+    -P )
+      MVN_ARGS="-P ${2}"; shift 2   ;;
     *           )
       usage >&2; exit 1             ;;
   esac
@@ -74,6 +77,7 @@ operator may still consider to verify the following manually
 3. Other concerns if any
 __EOF
 
+[[ "${SOURCE_URL}" != */ ]] && SOURCE_URL="${SOURCE_URL}/"
 HBASE_RC_VERSION=$(tr "/" "\n" <<< "${SOURCE_URL}" | tail -n2)
 HBASE_VERSION=$(echo "${HBASE_RC_VERSION}" | sed -e 's/RC[0-9]//g' | sed -e 's/hbase-//g')
 JAVA_VERSION=$(java -version 2>&1 | cut -f3 -d' ' | head -n1 | sed -e 's/"//g')
@@ -82,6 +86,11 @@ OUTPUT_DIR="${OUTPUT_DIR:-$(pwd)}"
 if [ ! -d "${OUTPUT_DIR}" ]; then
     echo "Output directory ${OUTPUT_DIR} does not exist, please create it before running this script."
     exit 1
+fi
+
+# Maven profile must be provided
+if [ -z "${MVN_ARGS}" ]; then
+    MVN_ARGS="-P runAllTests"
 fi
 
 OUTPUT_PATH_PREFIX="${OUTPUT_DIR}"/"${HBASE_RC_VERSION}"
@@ -106,13 +115,13 @@ function download_and_import_keys() {
 
 function download_release_candidate () {
     # get all files from release candidate repo
-    wget --recursive --no-parent "${SOURCE_URL}"
+    wget -r -np -N -nH --cut-dirs 4 "${SOURCE_URL}"
 }
 
 function verify_signatures() {
     rm -f "${OUTPUT_PATH_PREFIX}"_verify_signatures
     for file in *.tar.gz; do
-        gpg --verify "${file}".asc "${file}" >> "${OUTPUT_PATH_PREFIX}"_verify_signatures 2>&1 && SIGNATURE_PASSED=1 || SIGNATURE_PASSED=0
+        gpg --verify "${file}".asc "${file}" 2>&1 | tee -a "${OUTPUT_PATH_PREFIX}"_verify_signatures && SIGNATURE_PASSED=1 || SIGNATURE_PASSED=0
     done
 }
 
@@ -121,7 +130,7 @@ function verify_checksums() {
     SHA_EXT=$(find . -name "*.sha*" | awk -F '.' '{ print $NF }' | head -n 1)
     for file in *.tar.gz; do
         gpg --print-md SHA512 "${file}" > "${file}"."${SHA_EXT}".tmp
-        diff "${file}"."${SHA_EXT}".tmp "${file}"."${SHA_EXT}" >> "${OUTPUT_PATH_PREFIX}"_verify_checksums 2>&1 && CHECKSUM_PASSED=1 || CHECKSUM_PASSED=0
+        diff "${file}"."${SHA_EXT}".tmp "${file}"."${SHA_EXT}" 2>&1 | tee -a "${OUTPUT_PATH_PREFIX}"_verify_checksums && CHECKSUM_PASSED=1 || CHECKSUM_PASSED=0
         rm -f "${file}"."${SHA_EXT}".tmp
     done
 }
@@ -133,17 +142,17 @@ function unzip_from_source() {
 
 function rat_test() {
     rm -f "${OUTPUT_PATH_PREFIX}"_rat_test
-    mvn clean apache-rat:check > "${OUTPUT_PATH_PREFIX}"_rat_test 2>&1 && RAT_CHECK_PASSED=1
+    mvn clean apache-rat:check 2>&1 | tee "${OUTPUT_PATH_PREFIX}"_rat_test && RAT_CHECK_PASSED=1
 }
 
 function build_from_source() {
     rm -f "${OUTPUT_PATH_PREFIX}"_build_from_source
-    mvn clean install -DskipTests > "${OUTPUT_PATH_PREFIX}"_build_from_source 2>&1 && BUILD_FROM_SOURCE_PASSED=1
+    mvn clean install -DskipTests 2>&1 | tee "${OUTPUT_PATH_PREFIX}"_build_from_source && BUILD_FROM_SOURCE_PASSED=1
 }
 
-function run_all_tests() {
-    rm -f "${OUTPUT_PATH_PREFIX}"_run_all_tests
-    mvn test -P runAllTests > "${OUTPUT_PATH_PREFIX}"_run_all_tests 2>&1 && UNIT_TEST_PASSED=1
+function run_tests() {
+    rm -f "${OUTPUT_PATH_PREFIX}"_run_tests
+    mvn package "${MVN_ARGS}" -Dsurefire.rerunFailingTestsCount=3 2>&1 | tee "${OUTPUT_PATH_PREFIX}"_run_tests && UNIT_TEST_PASSED=1
 }
 
 function execute() {
@@ -159,7 +168,7 @@ function print_when_exit() {
         * Built from source (${JAVA_VERSION}): $( ((BUILD_FROM_SOURCE_PASSED)) && echo "ok" || echo "failed" )
          - mvn clean install -DskipTests
         * Unit tests pass (${JAVA_VERSION}): $( ((UNIT_TEST_PASSED)) && echo "ok" || echo "failed" )
-         - mvn test -P runAllTests
+         - mvn package ${MVN_ARGS}
 __EOF
   if ((CHECKSUM_PASSED)) && ((SIGNATURE_PASSED)) && ((RAT_CHECK_PASSED)) && ((BUILD_FROM_SOURCE_PASSED)) && ((UNIT_TEST_PASSED)) ; then
     exit 0
@@ -169,14 +178,14 @@ __EOF
 
 download_and_import_keys
 download_release_candidate
-pushd dist.apache.org/repos/dist/dev/hbase/"${HBASE_RC_VERSION}"
+pushd "${HBASE_RC_VERSION}"
 
 execute verify_signatures
 execute verify_checksums
 execute unzip_from_source
 execute rat_test
 execute build_from_source
-execute run_all_tests
+execute run_tests
 
 popd
 

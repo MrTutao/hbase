@@ -46,6 +46,8 @@ import org.apache.hadoop.hbase.quotas.SpaceQuotaSnapshotView;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
 import org.apache.hadoop.hbase.replication.SyncReplicationState;
+import org.apache.hadoop.hbase.security.access.GetUserPermissionsRequest;
+import org.apache.hadoop.hbase.security.access.Permission;
 import org.apache.hadoop.hbase.security.access.UserPermission;
 import org.apache.yetus.audience.InterfaceAudience;
 
@@ -86,6 +88,13 @@ public interface AsyncAdmin {
    */
   CompletableFuture<List<TableDescriptor>> listTableDescriptors(Pattern pattern,
       boolean includeSysTables);
+
+  /**
+   * List specific tables including system tables.
+   * @param tableNames the table list to match against
+   * @return - returns a list of TableDescriptors wrapped by a {@link CompletableFuture}.
+   */
+  CompletableFuture<List<TableDescriptor>> listTableDescriptors(List<TableName> tableNames);
 
   /**
    * Get list of table descriptors by namespace.
@@ -214,18 +223,6 @@ public interface AsyncAdmin {
   CompletableFuture<Boolean> isTableAvailable(TableName tableName);
 
   /**
-   * Use this api to check if the table has been created with the specified number of splitkeys
-   * which was used while creating the given table. Note : If this api is used after a table's
-   * region gets splitted, the api may return false. The return value will be wrapped by a
-   * {@link CompletableFuture}.
-   * @param tableName name of table to check
-   * @param splitKeys keys to check if the table has been created with all split keys
-   * @deprecated Since 2.2.0. Will be removed in 3.0.0. Use {@link #isTableAvailable(TableName)}
-   */
-  @Deprecated
-  CompletableFuture<Boolean> isTableAvailable(TableName tableName, byte[][] splitKeys);
-
-  /**
    * Add a column family to an existing table.
    * @param tableName name of the table to add column family to
    * @param columnFamily column family descriptor of column family to be added
@@ -274,6 +271,12 @@ public interface AsyncAdmin {
   CompletableFuture<NamespaceDescriptor> getNamespaceDescriptor(String name);
 
   /**
+   * List available namespaces
+   * @return List of namespaces wrapped by a {@link CompletableFuture}.
+   */
+  CompletableFuture<List<String>> listNamespaces();
+
+  /**
    * List available namespace descriptors
    * @return List of descriptors wrapped by a {@link CompletableFuture}.
    */
@@ -310,6 +313,7 @@ public interface AsyncAdmin {
   /**
    * Compact a table. When the returned CompletableFuture is done, it only means the compact request
    * was sent to HBase and may need some time to finish the compact operation.
+   * Throws {@link org.apache.hadoop.hbase.TableNotFoundException} if table not found.
    * @param tableName table to compact
    */
   default CompletableFuture<Void> compact(TableName tableName) {
@@ -320,6 +324,7 @@ public interface AsyncAdmin {
    * Compact a column family within a table. When the returned CompletableFuture is done, it only
    * means the compact request was sent to HBase and may need some time to finish the compact
    * operation.
+   * Throws {@link org.apache.hadoop.hbase.TableNotFoundException} if table not found.
    * @param tableName table to compact
    * @param columnFamily column family within a table. If not present, compact the table's all
    *          column families.
@@ -331,6 +336,8 @@ public interface AsyncAdmin {
   /**
    * Compact a table. When the returned CompletableFuture is done, it only means the compact request
    * was sent to HBase and may need some time to finish the compact operation.
+   * Throws {@link org.apache.hadoop.hbase.TableNotFoundException} if table not found for
+   * normal compaction type.
    * @param tableName table to compact
    * @param compactType {@link org.apache.hadoop.hbase.client.CompactType}
    */
@@ -340,6 +347,8 @@ public interface AsyncAdmin {
    * Compact a column family within a table. When the returned CompletableFuture is done, it only
    * means the compact request was sent to HBase and may need some time to finish the compact
    * operation.
+   * Throws {@link org.apache.hadoop.hbase.TableNotFoundException} if table not found for
+   * normal compaction type.
    * @param tableName table to compact
    * @param columnFamily column family within a table
    * @param compactType {@link org.apache.hadoop.hbase.client.CompactType}
@@ -367,6 +376,7 @@ public interface AsyncAdmin {
   /**
    * Major compact a table. When the returned CompletableFuture is done, it only means the compact
    * request was sent to HBase and may need some time to finish the compact operation.
+   * Throws {@link org.apache.hadoop.hbase.TableNotFoundException} if table not found.
    * @param tableName table to major compact
    */
   default CompletableFuture<Void> majorCompact(TableName tableName) {
@@ -377,6 +387,8 @@ public interface AsyncAdmin {
    * Major compact a column family within a table. When the returned CompletableFuture is done, it
    * only means the compact request was sent to HBase and may need some time to finish the compact
    * operation.
+   * Throws {@link org.apache.hadoop.hbase.TableNotFoundException} if table not found for
+   * normal compaction. type.
    * @param tableName table to major compact
    * @param columnFamily column family within a table. If not present, major compact the table's all
    *          column families.
@@ -388,6 +400,8 @@ public interface AsyncAdmin {
   /**
    * Major compact a table. When the returned CompletableFuture is done, it only means the compact
    * request was sent to HBase and may need some time to finish the compact operation.
+   * Throws {@link org.apache.hadoop.hbase.TableNotFoundException} if table not found for
+   * normal compaction type.
    * @param tableName table to major compact
    * @param compactType {@link org.apache.hadoop.hbase.client.CompactType}
    */
@@ -397,6 +411,7 @@ public interface AsyncAdmin {
    * Major compact a column family within a table. When the returned CompletableFuture is done, it
    * only means the compact request was sent to HBase and may need some time to finish the compact
    * operation.
+   * Throws {@link org.apache.hadoop.hbase.TableNotFoundException} if table not found.
    * @param tableName table to major compact
    * @param columnFamily column family within a table. If not present, major compact the table's all
    *          column families.
@@ -731,9 +746,10 @@ public interface AsyncAdmin {
 
   /**
    * Take a snapshot for the given table. If the table is enabled, a FLUSH-type snapshot will be
-   * taken. If the table is disabled, an offline snapshot is taken. Snapshots are considered unique
-   * based on <b>the name of the snapshot</b>. Attempts to take a snapshot with the same name (even
-   * a different type or with different parameters) will fail with a
+   * taken. If the table is disabled, an offline snapshot is taken. Snapshots are taken
+   * sequentially even when requested concurrently, across all tables. Snapshots are considered
+   * unique based on <b>the name of the snapshot</b>. Attempts to take a snapshot with the same
+   * name (even a different type or with different parameters) will fail with a
    * {@link org.apache.hadoop.hbase.snapshot.SnapshotCreationException} indicating the duplicate
    * naming. Snapshot names follow the same naming constraints as tables in HBase. See
    * {@link org.apache.hadoop.hbase.TableName#isLegalFullyQualifiedTableName(byte[])}.
@@ -746,7 +762,8 @@ public interface AsyncAdmin {
 
   /**
    * Create typed snapshot of the table. Snapshots are considered unique based on <b>the name of the
-   * snapshot</b>. Attempts to take a snapshot with the same name (even a different type or with
+   * snapshot</b>. Snapshots are taken sequentially even when requested concurrently, across all
+   * tables. Attempts to take a snapshot with the same name (even a different type or with
    * different parameters) will fail with a
    * {@link org.apache.hadoop.hbase.snapshot.SnapshotCreationException} indicating the duplicate
    * naming. Snapshot names follow the same naming constraints as tables in HBase. See
@@ -762,10 +779,9 @@ public interface AsyncAdmin {
   }
 
   /**
-   * Take a snapshot and wait for the server to complete that snapshot asynchronously. Only a single
-   * snapshot should be taken at a time for an instance of HBase, or results may be undefined (you
-   * can tell multiple HBase clusters to snapshot at the same time, but only one at a time for a
-   * single cluster). Snapshots are considered unique based on <b>the name of the snapshot</b>.
+   * Take a snapshot and wait for the server to complete that snapshot asynchronously. Snapshots
+   * are taken sequentially even when requested concurrently, across all tables. Snapshots are
+   * considered unique based on <b>the name of the snapshot</b>.
    * Attempts to take a snapshot with the same name (even a different type or with different
    * parameters) will fail with a {@link org.apache.hadoop.hbase.snapshot.SnapshotCreationException}
    * indicating the duplicate naming. Snapshot names follow the same naming constraints as tables in
@@ -960,7 +976,8 @@ public interface AsyncAdmin {
    * @param mayInterruptIfRunning if the proc completed at least one step, should it be aborted?
    * @return true if aborted, false if procedure already completed or does not exist. the value is
    *         wrapped by {@link CompletableFuture}
-   * @deprecated Since 2.1.1 -- to be removed.
+   * @deprecated since 2.1.1 and will be removed in 4.0.0.
+   * @see <a href="https://issues.apache.org/jira/browse/HBASE-21223">HBASE-21223</a>
    */
   @Deprecated
   CompletableFuture<Boolean> abortProcedure(long procId, boolean mayInterruptIfRunning);
@@ -1031,8 +1048,8 @@ public interface AsyncAdmin {
    * @return current live region servers list wrapped by {@link CompletableFuture}
    */
   default CompletableFuture<Collection<ServerName>> getRegionServers() {
-    return getClusterMetrics(EnumSet.of(Option.LIVE_SERVERS))
-      .thenApply(cm -> cm.getLiveServerMetrics().keySet());
+    return getClusterMetrics(EnumSet.of(Option.SERVERS_NAME))
+        .thenApply(ClusterMetrics::getServersName);
   }
 
   /**
@@ -1440,4 +1457,54 @@ public interface AsyncAdmin {
    * @param userPermission user name and the specific permission
    */
   CompletableFuture<Void> revoke(UserPermission userPermission);
+
+  /**
+   * Get the global/namespace/table permissions for user
+   * @param getUserPermissionsRequest A request contains which user, global, namespace or table
+   *          permissions needed
+   * @return The user and permission list
+   */
+  CompletableFuture<List<UserPermission>>
+      getUserPermissions(GetUserPermissionsRequest getUserPermissionsRequest);
+
+  /**
+   * Check if the user has specific permissions
+   * @param userName the user name
+   * @param permissions the specific permission list
+   * @return True if user has the specific permissions
+   */
+  CompletableFuture<List<Boolean>> hasUserPermissions(String userName,
+      List<Permission> permissions);
+
+  /**
+   * Check if call user has specific permissions
+   * @param permissions the specific permission list
+   * @return True if user has the specific permissions
+   */
+  default CompletableFuture<List<Boolean>> hasUserPermissions(List<Permission> permissions) {
+    return hasUserPermissions(null, permissions);
+  }
+
+  /**
+   * Turn on or off the auto snapshot cleanup based on TTL.
+   * <p/>
+   * Notice that, the method itself is always non-blocking, which means it will always return
+   * immediately. The {@code sync} parameter only effects when will we complete the returned
+   * {@link CompletableFuture}.
+   *
+   * @param on Set to <code>true</code> to enable, <code>false</code> to disable.
+   * @param sync If <code>true</code>, it waits until current snapshot cleanup is completed,
+   *   if outstanding.
+   * @return Previous auto snapshot cleanup value wrapped by a {@link CompletableFuture}.
+   */
+  CompletableFuture<Boolean> snapshotCleanupSwitch(boolean on, boolean sync);
+
+  /**
+   * Query the current state of the auto snapshot cleanup based on TTL.
+   *
+   * @return true if the auto snapshot cleanup is enabled, false otherwise.
+   *   The return value will be wrapped by a {@link CompletableFuture}.
+   */
+  CompletableFuture<Boolean> isSnapshotCleanupEnabled();
+
 }

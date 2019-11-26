@@ -29,11 +29,13 @@ import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.NavigableSet;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -41,7 +43,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.ByteBufferExtendedCell;
@@ -79,6 +80,7 @@ import org.apache.hadoop.hbase.client.PackagePrivateFieldAccessor;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.RegionLoadStats;
+import org.apache.hadoop.hbase.client.RegionStatesCount;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.SnapshotDescription;
@@ -124,13 +126,13 @@ import org.apache.hbase.thirdparty.com.google.protobuf.Service;
 import org.apache.hbase.thirdparty.com.google.protobuf.ServiceException;
 import org.apache.hbase.thirdparty.com.google.protobuf.TextFormat;
 import org.apache.hbase.thirdparty.com.google.protobuf.UnsafeByteOperations;
+
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.AdminService;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CloseRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetOnlineRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetOnlineRegionResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetRegionInfoRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetRegionInfoResponse;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetRegionLoadResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetServerInfoRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetServerInfoResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetStoreFileRequest;
@@ -345,13 +347,12 @@ public final class ProtobufUtil {
    * just {@link ServiceException}. Prefer this method to
    * {@link #getRemoteException(ServiceException)} because trying to
    * contain direct protobuf references.
-   * @param e
    */
-  public static IOException handleRemoteException(Exception e) {
+  public static IOException handleRemoteException(Throwable e) {
     return makeIOExceptionOfException(e);
   }
 
-  private static IOException makeIOExceptionOfException(Exception e) {
+  private static IOException makeIOExceptionOfException(Throwable e) {
     Throwable t = e;
     if (e instanceof ServiceException) {
       t = e.getCause();
@@ -524,7 +525,7 @@ public final class ProtobufUtil {
       get.setCacheBlocks(proto.getCacheBlocks());
     }
     if (proto.hasMaxVersions()) {
-      get.setMaxVersions(proto.getMaxVersions());
+      get.readVersions(proto.getMaxVersions());
     }
     if (proto.hasStoreLimit()) {
       get.setMaxResultsPerColumnFamily(proto.getStoreLimit());
@@ -1734,16 +1735,6 @@ public final class ProtobufUtil {
     }
   }
 
-  public static List<org.apache.hadoop.hbase.RegionLoad> getRegionLoadInfo(
-      GetRegionLoadResponse regionLoadResponse) {
-    List<org.apache.hadoop.hbase.RegionLoad> regionLoadList =
-        new ArrayList<>(regionLoadResponse.getRegionLoadsCount());
-    for (RegionLoad regionLoad : regionLoadResponse.getRegionLoadsList()) {
-      regionLoadList.add(new org.apache.hadoop.hbase.RegionLoad(regionLoad));
-    }
-    return regionLoadList;
-  }
-
   /**
    * A helper to close a region given a region name
    * using admin protocol.
@@ -1975,14 +1966,13 @@ public final class ProtobufUtil {
   }
 
   /**
-   * Unwraps an exception from a protobuf service into the underlying (expected) IOException.
-   * This method will <strong>always</strong> throw an exception.
+   * Unwraps an exception from a protobuf service into the underlying (expected) IOException. This
+   * method will <strong>always</strong> throw an exception.
    * @param se the {@code ServiceException} instance to convert into an {@code IOException}
+   * @throws NullPointerException if {@code se} is {@code null}
    */
   public static void toIOException(ServiceException se) throws IOException {
-    if (se == null) {
-      throw new NullPointerException("Null service exception passed!");
-    }
+    Objects.requireNonNull(se, "Service exception cannot be null");
 
     Throwable cause = se.getCause();
     if (cause != null && cause instanceof IOException) {
@@ -2577,12 +2567,25 @@ public final class ProtobufUtil {
    * @return The WAL log marker for bulk loads.
    */
   public static WALProtos.BulkLoadDescriptor toBulkLoadDescriptor(TableName tableName,
+    ByteString encodedRegionName, Map<byte[], List<Path>> storeFiles,
+    Map<String, Long> storeFilesSize, long bulkloadSeqId) {
+    return toBulkLoadDescriptor(tableName, encodedRegionName, storeFiles,
+      storeFilesSize, bulkloadSeqId, null, true);
+  }
+
+  public static WALProtos.BulkLoadDescriptor toBulkLoadDescriptor(TableName tableName,
       ByteString encodedRegionName, Map<byte[], List<Path>> storeFiles,
-      Map<String, Long> storeFilesSize, long bulkloadSeqId) {
+      Map<String, Long> storeFilesSize, long bulkloadSeqId,
+      List<String> clusterIds, boolean replicate) {
     BulkLoadDescriptor.Builder desc =
         BulkLoadDescriptor.newBuilder()
-        .setTableName(ProtobufUtil.toProtoTableName(tableName))
-        .setEncodedRegionName(encodedRegionName).setBulkloadSeqNum(bulkloadSeqId);
+          .setTableName(ProtobufUtil.toProtoTableName(tableName))
+          .setEncodedRegionName(encodedRegionName)
+          .setBulkloadSeqNum(bulkloadSeqId)
+          .setReplicate(replicate);
+    if(clusterIds != null) {
+      desc.addAllClusterIds(clusterIds);
+    }
 
     for (Map.Entry<byte[], List<Path>> entry : storeFiles.entrySet()) {
       WALProtos.StoreDescriptor.Builder builder = StoreDescriptor.newBuilder()
@@ -2933,12 +2936,15 @@ public final class ProtobufUtil {
     if (snapshotDesc.getCreationTime() != -1L) {
       builder.setCreationTime(snapshotDesc.getCreationTime());
     }
+    if (snapshotDesc.getTtl() != -1L &&
+        snapshotDesc.getTtl() < TimeUnit.MILLISECONDS.toSeconds(Long.MAX_VALUE)) {
+      builder.setTtl(snapshotDesc.getTtl());
+    }
     if (snapshotDesc.getVersion() != -1) {
       builder.setVersion(snapshotDesc.getVersion());
     }
     builder.setType(ProtobufUtil.createProtosSnapShotDescType(snapshotDesc.getType()));
-    SnapshotProtos.SnapshotDescription snapshot = builder.build();
-    return snapshot;
+    return builder.build();
   }
 
   /**
@@ -2950,10 +2956,12 @@ public final class ProtobufUtil {
    */
   public static SnapshotDescription
       createSnapshotDesc(SnapshotProtos.SnapshotDescription snapshotDesc) {
+    final Map<String, Object> snapshotProps = new HashMap<>();
+    snapshotProps.put("TTL", snapshotDesc.getTtl());
     return new SnapshotDescription(snapshotDesc.getName(),
-        snapshotDesc.hasTable() ? TableName.valueOf(snapshotDesc.getTable()) : null,
-        createSnapshotType(snapshotDesc.getType()), snapshotDesc.getOwner(),
-        snapshotDesc.getCreationTime(), snapshotDesc.getVersion());
+            snapshotDesc.hasTable() ? TableName.valueOf(snapshotDesc.getTable()) : null,
+            createSnapshotType(snapshotDesc.getType()), snapshotDesc.getOwner(),
+            snapshotDesc.getCreationTime(), snapshotDesc.getVersion(), snapshotProps);
   }
 
   public static RegionLoadStats createRegionLoadStats(ClientProtos.RegionLoadStats stats) {
@@ -3003,28 +3011,32 @@ public final class ProtobufUtil {
    }
 
   /**
-    * Create a CloseRegionRequest for a given region name
-    *
-    * @param regionName the name of the region to close
-    * @return a CloseRegionRequest
-    */
-   public static CloseRegionRequest buildCloseRegionRequest(ServerName server,
-       final byte[] regionName) {
-     return ProtobufUtil.buildCloseRegionRequest(server, regionName, null);
-   }
+   * Create a CloseRegionRequest for a given region name
+   * @param regionName the name of the region to close
+   * @return a CloseRegionRequest
+   */
+  public static CloseRegionRequest buildCloseRegionRequest(ServerName server, byte[] regionName) {
+    return ProtobufUtil.buildCloseRegionRequest(server, regionName, null);
+  }
 
-  public static CloseRegionRequest buildCloseRegionRequest(ServerName server,
-    final byte[] regionName, ServerName destinationServer) {
+  public static CloseRegionRequest buildCloseRegionRequest(ServerName server, byte[] regionName,
+      ServerName destinationServer) {
+    return buildCloseRegionRequest(server, regionName, destinationServer, -1);
+  }
+
+  public static CloseRegionRequest buildCloseRegionRequest(ServerName server, byte[] regionName,
+      ServerName destinationServer, long closeProcId) {
     CloseRegionRequest.Builder builder = CloseRegionRequest.newBuilder();
-    RegionSpecifier region = RequestConverter.buildRegionSpecifier(
-      RegionSpecifierType.REGION_NAME, regionName);
+    RegionSpecifier region =
+      RequestConverter.buildRegionSpecifier(RegionSpecifierType.REGION_NAME, regionName);
     builder.setRegion(region);
-    if (destinationServer != null){
+    if (destinationServer != null) {
       builder.setDestinationServer(toServerName(destinationServer));
     }
     if (server != null) {
       builder.setServerStartCode(server.getStartcode());
     }
+    builder.setCloseProcId(closeProcId);
     return builder.build();
   }
 
@@ -3289,4 +3301,51 @@ public final class ProtobufUtil {
     }
     return Collections.emptySet();
   }
+
+  public static ClusterStatusProtos.RegionStatesCount toTableRegionStatesCount(
+      RegionStatesCount regionStatesCount) {
+    int openRegions = 0;
+    int splitRegions = 0;
+    int closedRegions = 0;
+    int regionsInTransition = 0;
+    int totalRegions = 0;
+    if (regionStatesCount != null) {
+      openRegions = regionStatesCount.getOpenRegions();
+      splitRegions = regionStatesCount.getSplitRegions();
+      closedRegions = regionStatesCount.getClosedRegions();
+      regionsInTransition = regionStatesCount.getRegionsInTransition();
+      totalRegions = regionStatesCount.getTotalRegions();
+    }
+    return ClusterStatusProtos.RegionStatesCount.newBuilder()
+      .setOpenRegions(openRegions)
+      .setSplitRegions(splitRegions)
+      .setClosedRegions(closedRegions)
+      .setRegionsInTransition(regionsInTransition)
+      .setTotalRegions(totalRegions)
+      .build();
+  }
+
+  public static RegionStatesCount toTableRegionStatesCount(
+    ClusterStatusProtos.RegionStatesCount regionStatesCount) {
+    int openRegions = 0;
+    int splitRegions = 0;
+    int closedRegions = 0;
+    int regionsInTransition = 0;
+    int totalRegions = 0;
+    if (regionStatesCount != null) {
+      closedRegions = regionStatesCount.getClosedRegions();
+      regionsInTransition = regionStatesCount.getRegionsInTransition();
+      openRegions = regionStatesCount.getOpenRegions();
+      splitRegions = regionStatesCount.getSplitRegions();
+      totalRegions = regionStatesCount.getTotalRegions();
+    }
+    return new RegionStatesCount.RegionStatesCountBuilder()
+      .setOpenRegions(openRegions)
+      .setSplitRegions(splitRegions)
+      .setClosedRegions(closedRegions)
+      .setRegionsInTransition(regionsInTransition)
+      .setTotalRegions(totalRegions)
+      .build();
+  }
+
 }
